@@ -352,16 +352,16 @@ class GaussianProcess(nn.Module):
         
         # prior_len = config['dataloader']['prior_size']
         
-        # self.model = UNetModel(
-        #     in_channels=p_dim,
-        #     out_channels=p_dim,
-        # ).to(device)
-        
-        self.model = UNetGenerate(
+        self.model = UNetModel(
             in_channels=p_dim,
             out_channels=p_dim,
-            seq_length=seq_length
         ).to(device)
+        
+        # self.model = UNetGenerate(
+        #     in_channels=p_dim,
+        #     out_channels=p_dim,
+        #     seq_length=seq_length
+        # ).to(device)
         
         self.input_dim = p_dim
         self.seq_length = seq_length

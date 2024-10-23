@@ -80,7 +80,7 @@ def parse_args():
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='./Experiments_new')
+    parser.add_argument('--resultfolder', default='../Experiments_new')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -282,7 +282,8 @@ class Tester:
         self.activityname = args.activityname
         self.folder_path = os.path.join(args.resultfolder, args.foldername)
         pt_path, testid = self._find_recent_pth()
-        
+        pt_path = 'runningforward_ep999.pt'
+        # pdb.set_trace()
         self.result_path = os.path.join(self.folder_path, f"{args.activityname}.npy")
         self.checkpoint = os.path.join(self.folder_path, pt_path)
         
@@ -344,33 +345,33 @@ class Tester:
         iterations = 5
         self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
         self.fake_data = np.load(self.result_path)
-        # context_fid_score = []
+        context_fid_score = []
 
-        # for i in range(iterations):
-        #     context_fid = Context_FID(self.ori_data[:], self.fake_data[:self.ori_data.shape[0]])
-        #     context_fid_score.append(context_fid)
-        #     logging.info(f"Iter {i}: context-fid = {context_fid}")
-        # contextfid_score_mean = display_scores(context_fid_score)
-        # logging.info(f"Final context-fid score : , {contextfid_score_mean}")
+        for i in range(iterations):
+            context_fid = Context_FID(self.ori_data[:], self.fake_data[:self.ori_data.shape[0]])
+            context_fid_score.append(context_fid)
+            logging.info(f"Iter {i}: context-fid = {context_fid}")
+        contextfid_score_mean = display_scores(context_fid_score)
+        logging.info(f"Final context-fid score : , {contextfid_score_mean}")
         
-        # """
-        # Correlation score
-        # """
-        # x_real = torch.from_numpy(self.ori_data)
-        # x_fake = torch.from_numpy(self.fake_data)
-        # correlational_score = []
-        # size = int(x_real.shape[0] / iterations)
+        """
+        Correlation score
+        """
+        x_real = torch.from_numpy(self.ori_data)
+        x_fake = torch.from_numpy(self.fake_data)
+        correlational_score = []
+        size = int(x_real.shape[0] / iterations)
 
-        # for i in range(iterations):
-        #     real_idx = self.random_choice(x_real.shape[0], size)
-        #     fake_idx = self.random_choice(x_fake.shape[0], size)
-        #     corr = CrossCorrelLoss(x_real[real_idx, :, :], name='CrossCorrelLoss')
-        #     loss = corr.compute(x_fake[fake_idx, :, :])
-        #     correlational_score.append(loss.item())
-        #     logging.info(f"Iter {i}: , cross-correlation = , {loss.item()}")
+        for i in range(iterations):
+            real_idx = self.random_choice(x_real.shape[0], size)
+            fake_idx = self.random_choice(x_fake.shape[0], size)
+            corr = CrossCorrelLoss(x_real[real_idx, :, :], name='CrossCorrelLoss')
+            loss = corr.compute(x_fake[fake_idx, :, :])
+            correlational_score.append(loss.item())
+            logging.info(f"Iter {i}: , cross-correlation = , {loss.item()}")
 
-        # corr_score_mean = display_scores(correlational_score)
-        # logging.info(f"Final correlation score : , {corr_score_mean}")
+        corr_score_mean = display_scores(correlational_score)
+        logging.info(f"Final correlation score : , {corr_score_mean}")
     
         """
         Discriminative score and Predictive score
@@ -558,7 +559,7 @@ def main():
     """
     step3: analysis the config
     """
-    config_path = './Config/' + args.configname + '.yaml'
+    config_path = '../Config/' + args.configname + '.yaml'
     config = load_yaml_config(config_path)
     
     """
@@ -583,9 +584,9 @@ def main():
         # result_path = folder_path + f"/{args.activityname}_ep{testid}_result.h5"
         # tester = Tester(config, args, device, checkpoint, result_path)
         tester = Tester(config, args, device)
-        # tester.test()
+        tester.test()
         tester.show_results()
-        # tester.visualization(analysis='tsne')
+        tester.visualization(analysis='tsne')
     
     # result_show = evaluation()
     

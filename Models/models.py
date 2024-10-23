@@ -623,8 +623,8 @@ class ResidualBlock(TimestepBlock):
 
         self.cross_attention = CrossAttention(dim=out_channels, context_dim=out_channels)
         
-        self.conv2 = nn.Sequential(norm_layer(out_channels*2), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels*2, out_channels, kernel_size=3, padding=1))
-        # self.conv2 = nn.Sequential(norm_layer(out_channels), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1))
+        # self.conv2 = nn.Sequential(norm_layer(out_channels*2), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels*2, out_channels, kernel_size=3, padding=1))
+        self.conv2 = nn.Sequential(norm_layer(out_channels), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1))
 
         if in_channels != out_channels:
             self.shortcut = nn.Conv1d(in_channels, out_channels, kernel_size=1)
@@ -648,7 +648,7 @@ class ResidualBlock(TimestepBlock):
         """
         if context, then use concat h and ctx
         """
-        h = torch.concat((h, ctx), dim=1)
+        # h = torch.concat((h, ctx), dim=1)
         # pdb.set_trace()
         h = self.conv2(h)
         return h + self.shortcut(x)

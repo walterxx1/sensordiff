@@ -81,7 +81,7 @@ def parse_args():
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='./Experiments_new')
+    parser.add_argument('--resultfolder', default='../Experiments_new')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -295,6 +295,7 @@ class Tester:
     
     def _find_recent_pth(self):
         # List all files in the directory
+        # pdb.set_trace()
         files = os.listdir(self.folder_path)
         
         # Filter out .pt files
@@ -330,7 +331,8 @@ class Tester:
                 sample_list.append(samples.detach().cpu().numpy())
                 
         samples = np.vstack(sample_list)
-        samples = unnormalize_to_zero_to_one(samples)
+        # samples = unnormalize_to_zero_to_one(samples)
+        
         # print(samples.shape)
         # result_path = os.path.join(self.folder_path, self.activityname+'.npy')
         np.save(self.result_path , samples)
@@ -355,7 +357,7 @@ class Tester:
             'elevatorup': 11,
             'elevatordown': 12
         }
-        activity_label_num = activity_label[self.activityname]
+        activity_label_num = activity_label[self.activityname]-1
         
         data_path = self.config['dataloader']['dataset_path']
         with h5py.File(data_path, 'r') as f_r:
@@ -368,6 +370,7 @@ class Tester:
         self.activity_batches = torch.split(self.activity_list, batch_size)
 
     def show_results(self, json_path):
+        # pdb.set_trace()
         """
         Context-FID score
         """
@@ -637,7 +640,7 @@ def main():
     """
     step3: analysis the config
     """
-    config_path = './Config/' + args.configname + '.yaml'
+    config_path = '../Config/' + args.configname + '.yaml'
     config = load_yaml_config(config_path)
     
     """
@@ -669,9 +672,9 @@ def main():
                 json.dump(empty_dict, file, indent=4)
         
         tester = Tester(config, args, device)
-        # tester.test()
+        tester.test()
         tester.show_results(json_path)
-        # tester.visualization(analysis='tsne')
+        tester.visualization(analysis='tsne')
     
     # result_show = evaluation()
     

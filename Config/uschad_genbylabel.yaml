@@ -16,12 +16,12 @@ solver:
   eval_each: 1000
 
 dataloader:
-  dataset_path: ./Datas/uschad_activity_dataset.h5
+  dataset_path: ../Datas/uschad_activity_dataset.h5
   train_batch_size: 2048
   eval_batch_size: 2048
 
   window_size: 24
   step_size: 24
 
-  result_folder: ./Experiments_new/
+  result_folder: ../Experiments_new/
 

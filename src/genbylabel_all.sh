@@ -12,7 +12,7 @@ after the genbylabel is done, changed it back and run these several lines
 
 
 # train
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --gpu 6 --train
+# python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --gpu 6 --train
 
 # test
 ACTIVITY='elevatordown'
@@ -34,9 +34,6 @@ ACTIVITY='sleeping'
 python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
 
 ACTIVITY='standing'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
-
-ACTIVITY='walkingleft'
 python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
 
 ACTIVITY='walkingdownstairs'
