@@ -1,6 +1,6 @@
 
-# Project Title
-
+# Activity guided Diffusion for Sensor Data Generation
+<!-- 
 [![Docs](https://img.shields.io/badge/docs-available-brightgreen.svg)](https://link-to-documentation) [![GitHub release (latest by date)](https://img.shields.io/github/v/release/username/projectname)](https://img.shields.io/github/v/release/username/projectname?style=flat-square)
 
 ## Description
@@ -49,13 +49,13 @@ Add more detailed usage examples and explanations of the available API functions
 ## Links
 
 - [Documentation](https://link-to-documentation)
-- [Related Project](https://link-to-related-project)
+- [Related Project](https://link-to-related-project) -->
 
-## License
+<!-- ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-You can now add the actual project name, documentation links, and usage details. Let me know if you need further assistance!
+You can now add the actual project name, documentation links, and usage details. Let me know if you need further assistance! -->
 
 # Public dataset -- ETTh1
 
