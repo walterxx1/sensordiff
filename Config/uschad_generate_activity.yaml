@@ -1,0 +1,27 @@
+model:
+  model_name: uschad_gen_activity
+  seq_length: 24
+  diff_num_steps: 500
+  stride: 1
+
+  context_dim: 6 # prior dim
+  point_dim: 6 # future dim
+  context_dim_out: 6 # encoded context dim
+  feature_dim: 64 # shared space dim
+
+
+solver:
+  num_epochs: 2000
+  learning_rate: 1.0e-5
+  eval_each: 1000
+
+dataloader:
+  dataset_path: ./Datas/uschad_activity_dataset.h5
+  train_batch_size: 1024
+  eval_batch_size: 32
+
+  window_size: 24
+  step_size: 24
+
+  result_folder: ./Experiments_new/
+

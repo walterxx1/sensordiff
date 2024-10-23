@@ -1,0 +1,33 @@
+model:
+  model_name: uschad
+  seq_length: 200
+  diff_num_steps: 200
+  stride: 1
+
+  context_dim: 6 # prior dim
+  point_dim: 6 # future dim
+  context_dim_out: 6 # encoded context dim
+  feature_dim: 64 # shared space dim
+
+
+solver:
+  num_epochs: 30
+  learning_rate: 0.001
+  eval_each: 15
+
+dataloader:
+  dataset_path: ./Datas/uschad_dataset.h5
+  matrix_path: /mnt/data728/datasets/USC-HAD-maodong/uschad_metrix_generate.h5
+  train_batch_size: 32
+  eval_batch_size: 32
+
+  train_list: [1,2,3,4,5,6,7,8,9]
+  eval_list: [10,11]
+  test_list: [12,13,14]
+  window_size: 200
+  step_size_train: 16
+  step_size_eval: 32
+  step_size_test: 32
+  overlap: 32
+  prior_size: 200 # history data for condition
+  future_size: 168
