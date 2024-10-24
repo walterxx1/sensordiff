@@ -99,6 +99,7 @@ You can now add the actual project name, documentation links, and usage details.
 | (Lower the Better)      | Ours           | 0.101               | 0.103               | 0.300         | 0.116         | -->
 
 
+# Result on 18000 eps
 |                         | **SensorDiff** |                      |                          |                     |  **Diffusion-Ts** |                  |                         |                     |
 |-------------------------|----------------|----------------------|--------------------------|---------------------|---------------|----------------------|-------------------------|---------------------|
 |                         | Context<br>FID | Correlation<br>Score |  Discriminative<br>Score | Predictive<br>Score |Context<br>FID | Correlation<br>Score | Discriminative<br>Score | Predictive<br>Score |
@@ -114,3 +115,4 @@ You can now add the actual project name, documentation links, and usage details.
 | **walkingleft**         | 0.092 ± .015 | 0.050 ± .004 | 0.014 ± .009 | 0.041 ± .002 | 0.072 ± .005 | 0.177 ± .028 |0.000 ± .000 | 0.040 ± .002 |
 | **walkingright**        | 0.069 ± .019 | 0.053 ± .009 | 0.043 ± .027 | 0.034 ± .002 | 0.047 ± .007 | 0.165 ± .051 |0.000 ± .000 | 0.032 ± .001 |
 | **walkingupstairs**     | 0.068 ± .034 | 0.056 ± .004 | 0.118 ± .006 | 0.043 ± .001 | 0.052 ± .009 | 0.155 ± .023 |0.006 ± .006 | 0.042 ± .001 |
+
