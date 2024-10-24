@@ -118,4 +118,4 @@ You can now add the actual project name, documentation links, and usage details.
 
 # Current results
 
-![Project Overview](./result_imgs/result_compare.jpg)
+![Project Overview](./result_imgs/result_compare.png)
