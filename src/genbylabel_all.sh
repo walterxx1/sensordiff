@@ -10,43 +10,47 @@ after the genbylabel is done, changed it back and run these several lines
 # python main_activity_gen_fullpic.py --configname uschad_generate_activity --foldername $ACTIVITY --activityname $ACTIVITY --train
 # python main_activity_gen_fullpic.py --configname uschad_generate_activity --foldername $ACTIVITY --activityname $ACTIVITY --testid 10
 
+RESULT_FOLDER='genbylabel'
+FILE_NAME='main_genbylabel.py'
+CONFIG_NAME='uschad_genbylabel'
+GPU=6
 
 # train
-# python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --gpu 6 --train
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --gpu $GPU --train
 
 # test
-ACTIVITY='elevatordown'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='elevatordown'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='elevatorup'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='elevatorup'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='jumping'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='jumping'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='runningforward'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='runningforward'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='sitting'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='sitting'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='sleeping'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='sleeping'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='standing'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='standing'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
-ACTIVITY='walkingdownstairs'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+# ACTIVITY='walkingdownstairs'
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
 ACTIVITY='walkingforward'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
 ACTIVITY='walkingleft'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
 ACTIVITY='walkingright'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10
 
 ACTIVITY='walkingupstairs'
-python main_genbylabel.py --configname uschad_genbylabel --foldername genbylabel --activityname $ACTIVITY --gpu 6 --testid 10
+python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --activityname $ACTIVITY --gpu $GPU --testid 10

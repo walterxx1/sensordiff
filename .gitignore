@@ -167,3 +167,7 @@ Imgs/
 Datas/
 Experiments_new/
 tmp/
+Experiments_100/
+Experiments_100_genbylabel/
+Experiments_genbylabel_multifreq/
+Experiments_genbylabel_seed2/

@@ -14,7 +14,7 @@ import math
 import pdb
 import logging
 import numpy as np
-
+import json
 import re
 import torch
 import torch.nn as nn
@@ -80,7 +80,7 @@ def parse_args():
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='../Experiments_new')
+    parser.add_argument('--resultfolder', default='../Experiments_100')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -128,7 +128,8 @@ class GenerateDataset(Dataset):
     def __init__(self, args, config) -> None:
         super().__init__()
         self.data_path = config['dataloader']['dataset_path']
-        self.result_folder = config['dataloader']['result_folder']
+        # self.result_folder = config['dataloader']['result_folder']
+        self.result_folder = args.resultfolder
         self.activityname = args.activityname
 
         self.dir = os.path.join(self.result_folder, args.foldername)
@@ -228,7 +229,8 @@ class Trainer:
                 check_point = {
                     'ddpm': self.model.state_dict()
                 }
-                pt_folder = os.path.join(self.config['dataloader']['result_folder'], self.args.activityname)
+                # pt_folder = os.path.join(self.config['dataloader']['result_folder'], self.args.activityname)
+                pt_folder = os.path.join(self.args.resultfolder, self.args.activityname)
                 pt_path = os.path.join(pt_folder, f"{self.args.activityname}_ep{epoch}.pt")
                 
             if epoch % self.config['solver']['eval_each'] == 0:
@@ -282,7 +284,7 @@ class Tester:
         self.activityname = args.activityname
         self.folder_path = os.path.join(args.resultfolder, args.foldername)
         pt_path, testid = self._find_recent_pth()
-        pt_path = 'runningforward_ep999.pt'
+        # pt_path = 'runningforward_ep999.pt'
         # pdb.set_trace()
         self.result_path = os.path.join(self.folder_path, f"{args.activityname}.npy")
         self.checkpoint = os.path.join(self.folder_path, pt_path)
@@ -337,14 +339,19 @@ class Tester:
         select_idx = np.random.randint(low=0, high=size, size=(num_select,))
         return select_idx
 
-    def show_results(self):
+    def show_results(self, json_path):
         """
         Context-FID score
         """
-        
+        logging.info(f"=====================================================")
+        logging.info(f"Below is the Metrics of {self.activityname}!")
+        logging.info(f"=====================================================")
+        window_size = self.config['dataloader']['window_size']
         iterations = 5
-        self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
+        self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_{window_size}_train.npy'))
         self.fake_data = np.load(self.result_path)
+        
+        result_dict = {}
         context_fid_score = []
 
         for i in range(iterations):
@@ -353,6 +360,12 @@ class Tester:
             logging.info(f"Iter {i}: context-fid = {context_fid}")
         contextfid_score_mean = display_scores(context_fid_score)
         logging.info(f"Final context-fid score : , {contextfid_score_mean}")
+        
+        fid_mean, fid_sigma = contextfid_score_mean
+        fid_dict = {}
+        fid_dict['mean'] = fid_mean
+        fid_dict['sigma'] = fid_sigma
+        result_dict['context-fid'] = fid_dict
         
         """
         Correlation score
@@ -373,6 +386,12 @@ class Tester:
         corr_score_mean = display_scores(correlational_score)
         logging.info(f"Final correlation score : , {corr_score_mean}")
     
+        corr_mean, corr_sigma = corr_score_mean
+        corr_dict = {}
+        corr_dict['mean'] = corr_mean
+        corr_dict['sigma'] = corr_sigma
+        result_dict['correlation'] = corr_dict
+    
         """
         Discriminative score and Predictive score
         """
@@ -388,6 +407,12 @@ class Tester:
         discriminative_score_mean = display_scores(discriminative_score)
         logging.info(f"Final discriminative score : {discriminative_score_mean}")
         
+        disc_mean, disc_sigma = discriminative_score_mean
+        disc_dict = {}
+        disc_dict['mean'] = disc_mean
+        disc_dict['sigma'] = disc_sigma
+        result_dict['discriminative'] = disc_dict
+        
         predictive_score = []
         for i in range(iterations):
             temp_pred = predictive_score_metrics(self.ori_data, self.fake_data[:self.ori_data.shape[0]], self.device)
@@ -397,8 +422,21 @@ class Tester:
         pred_score_mean = display_scores(predictive_score)
         logging.info(f"Final Predictive score : {pred_score_mean}")
     
-    # def draw_img(self):
-    #     img_path = os.path.join(self.folder_path, self.activityname+'.png')
+    
+        pred_mean, pred_sigma = pred_score_mean
+        pred_dict = {}
+        pred_dict['mean'] = pred_mean
+        pred_dict['sigma'] = pred_sigma
+        result_dict['predictive'] = pred_dict
+    
+        with open(json_path, 'r') as file:
+            file_dict = json.load(file)
+        
+        file_dict[self.activityname] = result_dict
+        
+        with open(json_path, 'w') as file:
+            json.dump(file_dict, file, indent=4)
+    
     
     def visualization(self, analysis='tsne'):
         """Using PCA or tSNE for generated and original data visualization.
@@ -408,8 +446,8 @@ class Tester:
             - generated_data: generated synthetic data
             - analysis: tsne or pca
         """  
-        
-        self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
+        window_size = self.config['dataloader']['window_size']
+        self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_{window_size}_train.npy'))
         self.fake_data = np.load(self.result_path)
         
         ori_data = self.ori_data
@@ -583,9 +621,16 @@ def main():
         # checkpoint = folder_path + f"/{args.activityname}_ep{testid}.pt"
         # result_path = folder_path + f"/{args.activityname}_ep{testid}_result.h5"
         # tester = Tester(config, args, device, checkpoint, result_path)
+        
+        json_path = os.path.join(args.resultfolder, 'all_activities.json')
+        if not os.path.exists(json_path):
+            with open(json_path, 'w') as file:
+                empty_dict = {}
+                json.dump(empty_dict, file, indent=4)
+        
         tester = Tester(config, args, device)
         tester.test()
-        tester.show_results()
+        tester.show_results(json_path)
         tester.visualization(analysis='tsne')
     
     # result_show = evaluation()

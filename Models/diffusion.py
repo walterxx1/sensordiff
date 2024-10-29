@@ -352,16 +352,16 @@ class GaussianProcess(nn.Module):
         
         # prior_len = config['dataloader']['prior_size']
         
-        self.model = UNetModel(
-            in_channels=p_dim,
-            out_channels=p_dim,
-        ).to(device)
-        
-        # self.model = UNetGenerate(
+        # self.model = UNetModel(
         #     in_channels=p_dim,
         #     out_channels=p_dim,
-        #     seq_length=seq_length
         # ).to(device)
+        
+        self.model = UNetGenerate(
+            in_channels=p_dim,
+            out_channels=p_dim,
+            seq_length=seq_length
+        ).to(device)
         
         self.input_dim = p_dim
         self.seq_length = seq_length
@@ -499,8 +499,6 @@ class GaussianProcess(nn.Module):
         loss = F.mse_loss(noise, predicted_noise)
         # pdb.set_trace()
         return loss
-        
-    
     
     @torch.no_grad()
     # def sample(self,  image_size, batch_size=8, channels=3):
@@ -562,3 +560,192 @@ class GaussianProcess(nn.Module):
         loss = F.mse_loss(noise, predicted_noise)
         return loss
 
+
+class GaussianProcess_multifreq(nn.Module):
+    def __init__(self, config, device):
+        super(GaussianProcess_multifreq, self).__init__()
+        
+        config_model = config['model']
+        ctx_dim = config_model['context_dim']
+        p_dim = config_model['point_dim']
+        ctx_dim_out = config_model['context_dim_out']
+        feat_dim = config_model['feature_dim']
+        seq_length = config_model['seq_length']
+        self.num_steps = config_model['diff_num_steps']
+        self.stride = config_model['stride']
+
+        self.model_main = UNetGenerate(
+            in_channels=p_dim,
+            out_channels=p_dim,
+            seq_length=seq_length
+        ).to(device)
+        
+        self.model_res = UNetGenerate(
+            in_channels=p_dim,
+            out_channels=p_dim,
+            seq_length=seq_length
+        ).to(device)
+        
+        self.input_dim = p_dim
+        self.seq_length = seq_length
+        self.device = device
+        
+        # beta_start, beta_end = 1e-4, 2e-2
+        scale = 1000 / self.num_steps
+        beta_start = scale * 0.0001
+        beta_end = scale * 0.02
+        # Create a linear schedule for betas
+        self.betas = torch.linspace(beta_start, beta_end, steps=self.num_steps+1).to(self.device)  # t from 0 to num_steps
+        self.alphas = 1.0 - self.betas
+        self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
+        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.0)
+        
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
+        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
+        self.log_one_minus_alphas_cumprod = torch.log(1.0 - self.alphas_cumprod)
+        self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
+        self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.posterior_variance = self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+        # below: log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain
+        self.posterior_log_variance_clipped = torch.log(self.posterior_variance.clamp(min=1e-20))
+        self.posterior_mean_coef1 = self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+        self.posterior_mean_coef2 = (1.0 - self.alphas_cumprod_prev) * torch.sqrt(self.alphas) / (1.0 - self.alphas_cumprod)
+
+    def _extract(self, a: torch.FloatTensor, t: torch.LongTensor, x_shape):
+        # get the param of given timestep t
+        batch_size = t.shape[0]
+        out = a.to(t.device).gather(0, t).float()
+        out = out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
+        return out
+    
+    def q_sample(self, x_start: torch.FloatTensor, t: torch.LongTensor, noise=None):
+        # forward diffusion (using the nice property): q(x_t | x_0)
+        if noise is None:
+            noise = torch.randn_like(x_start).to(self.device)
+
+        sqrt_alphas_cumprod_t = self._extract(self.sqrt_alphas_cumprod, t, x_start.shape)
+        sqrt_one_minus_alphas_cumprod_t = self._extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+
+        return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
+    
+    def q_mean_variance(self, x_start: torch.FloatTensor, t: torch.LongTensor):
+        # Get the mean and variance of q(x_t | x_0).
+        mean = self._extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
+        variance = self._extract(1.0 - self.alphas_cumprod, t, x_start.shape)
+        log_variance = self._extract(self.log_one_minus_alphas_cumprod, t, x_start.shape)
+        return mean, variance, log_variance
+
+    def q_posterior_mean_variance(self, x_start: torch.FloatTensor, x_t: torch.FloatTensor, t: torch.LongTensor):
+        # Compute the mean and variance of the diffusion posterior: q(x_{t-1} | x_t, x_0)
+        posterior_mean = self._extract(self.posterior_mean_coef1, t, x_t.shape) * x_start + self._extract(self.posterior_mean_coef2, t, x_t.shape) * x_t
+        posterior_variance = self._extract(self.posterior_variance, t, x_t.shape)
+        posterior_log_variance_clipped = self._extract(self.posterior_log_variance_clipped, t, x_t.shape)
+        return posterior_mean, posterior_variance, posterior_log_variance_clipped
+    
+    def predict_start_from_noise(self, x_t: torch.FloatTensor, t: torch.LongTensor, noise: torch.FloatTensor):
+        # compute x_0 from x_t and pred noise: the reverse of `q_sample`
+        return self._extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - self._extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
+
+
+    def p_mean_variance(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True, model='res'):
+        # compute predicted mean and variance of p(x_{t-1} | x_t)
+        # predict noise using model
+        if model == 'res':
+            pred_noise = self.model_res(context, x_t, t)
+        else:
+            pred_noise = self.model_main(context, x_t, t)
+        # pred_noise = self.model(context, x_t, t)
+        # get the predicted x_0: different from the algorithm2 in the paper
+        x_recon = self.predict_start_from_noise(x_t, t, pred_noise)
+        if clip_denoised:
+            x_recon = torch.clamp(x_recon, min=-1.0, max=1.0)
+        model_mean, posterior_variance, posterior_log_variance = self.q_posterior_mean_variance(x_recon, x_t, t)
+        return model_mean, posterior_variance, posterior_log_variance
+
+
+    @torch.no_grad()
+    def p_sample(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True, model='res'):
+        # denoise_step: sample x_{t-1} from x_t and pred_noise
+        # predict mean and variance
+        if model == 'res':
+            model_mean, _, model_log_variance = self.p_mean_variance(context, x_t, t, clip_denoised=clip_denoised, model='res')
+        else:
+            model_mean, _, model_log_variance = self.p_mean_variance(context, x_t, t, clip_denoised=clip_denoised, model='main')
+            
+        # model_mean, _, model_log_variance = self.p_mean_variance(context, x_t, t, clip_denoised=clip_denoised)
+        noise = torch.randn_like(x_t).to(self.device)
+        # no noise when t == 0
+        nonzero_mask = (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
+        # compute x_{t-1}
+        pred_img = model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
+        return pred_img
+    
+
+    def norm_and_main_freq(self, x, k):
+        # Apply FFT to get the frequency domain representation
+        z = torch.fft.rfft(x, dim=2)
+        
+        # Find the top k largest magnitude frequency indices
+        ks = torch.topk(z.abs(), k, dim=2)
+        top_k_indices = ks.indices
+        
+        # Create a mask for the top k frequencies
+        mask = torch.zeros_like(z)
+        mask.scatter_(2, top_k_indices, 1)  # Set top k frequency indices to 1
+        
+        # Apply mask to get the top k frequency components
+        z_m = z * mask  # z_m contains only the top k frequency components
+        
+        # Get the remaining frequencies (by zeroing out the top k components)
+        z_r = z * (1 - mask)  # z_r contains the remaining lower magnitude frequencies
+        
+        # Apply inverse FFT to bring the signals back to time domain
+        x_m = torch.fft.irfft(z_m, dim=2).real  # Main frequency components
+        x_r = torch.fft.irfft(z_r, dim=2).real  # Remaining part (without top k frequencies)
+        
+        # Return both components
+        return x_m, x_r
+    
+    
+    @torch.no_grad()
+    def sample_generate(self, label, num_steps=None):
+        batch_size = label.shape[0]
+        img_m = torch.randn((batch_size, self.seq_length, self.input_dim), device=self.device)
+        img_m = img_m.permute(0, 2, 1)
+        img_r = torch.randn((batch_size, self.seq_length, self.input_dim), device=self.device)
+        img_r = img_r.permute(0, 2, 1)
+        context = label
+        # img = img.permute(0, 2, 1)
+        imgs = []
+        for i in reversed(range(0, self.num_steps)):
+            t = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
+            img_m = self.p_sample(context, img_m, t, model='main')
+            img_r = self.p_sample(context, img_r, t, model='res')
+            img = img_m + img_r
+            imgs.append(img.cpu().numpy())
+        img = img.permute(0, 2, 1)
+        return imgs, img
+    
+    
+    def get_loss_generate(self, label, future):
+        future = future.permute(0, 2, 1)
+        future_m, future_r = self.norm_and_main_freq(future, k=5)
+        
+        batch_size = label.shape[0]
+        t = torch.randint(0, self.num_steps+1, (batch_size,), device=self.device)
+        noise = torch.randn_like(future)  # random noise ~ N(0, 1)
+        
+        x_noisy_r = self.q_sample(future_r, t, noise=noise)
+        x_noisy_m = self.q_sample(future_m, t, noise=noise)
+        
+        predicted_noise_r = self.model_res(label, x_noisy_r, t)
+        predicted_noise_m = self.model_main(label, x_noisy_m, t)
+        
+        loss_r = F.mse_loss(noise, predicted_noise_r)
+        loss_m = F.mse_loss(noise, predicted_noise_m)
+        return loss_r + loss_m
+        
+        

@@ -27,7 +27,7 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 # from data_preprocess import data_prepare_generate_uschad
-from Models.diffusion import GaussianProcess
+from Models.diffusion import GaussianProcess_multifreq
 
 import sys
 # sys.path.append(os.path.join(os.path.dirname('__file__'), '../'))
@@ -67,8 +67,8 @@ so it's the diffusion process's problem
 def parse_args():
     parser = argparse.ArgumentParser(description='Pytorch Training Script')
     
-    parser.add_argument('--seed', type=int, default=888)
-    parser.add_argument('--gpu', type=int, default=6,
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--gpu', type=int, default=7,
                         help='GPU id to use, If given, only the specific gpu will be used, and'
                         'ddp will be disabled')
     parser.add_argument('--configname', type=str, default='gpto1',
@@ -81,7 +81,7 @@ def parse_args():
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='../Experiments_100_genbylabel')
+    parser.add_argument('--resultfolder', default='../Experiments_genbylabel_multifreq')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -129,7 +129,6 @@ class GenerateDataset(Dataset):
     def __init__(self, args, config) -> None:
         super().__init__()
         self.data_path = config['dataloader']['dataset_path']
-        # self.result_folder = config['dataloader']['result_folder']
         self.result_folder = args.resultfolder
         self.activityname = args.activityname
 
@@ -233,11 +232,9 @@ class Trainer:
                 check_point = {
                     'ddpm': self.model.state_dict()
                 }
-                result_folder = self.args.resultfolder
-                # pt_folder = os.path.join(self.config['dataloader']['result_folder'], self.args.foldername)
-                pt_folder = os.path.join(result_folder, self.args.foldername)
+                pt_folder = os.path.join(self.args.resultfolder, self.args.foldername)
                 pt_path = os.path.join(pt_folder, f"genbylabel_ep{epoch}.pt")
-                
+            # pdb.set_trace()
             if epoch % self.config['solver']['eval_each'] == 0:
                 torch.save(check_point, pt_path)
             
@@ -249,7 +246,7 @@ class Trainer:
         logging.info('> Train loader built!')
     
     def _build_model(self):
-        self.model = GaussianProcess(self.config, self.device)
+        self.model = GaussianProcess_multifreq(self.config, self.device)
         
     def _build_optimizer(self):
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.config['solver']['learning_rate'], weight_decay=1e-5)
@@ -294,7 +291,6 @@ class Tester:
         self.checkpoint = os.path.join(self.folder_path, pt_path)
         
         self.scaler_dict = dict()
-        # self.result_folder = config['dataloader']['result_folder']
         self.result_folder = args.resultfolder
         self._build()
     
@@ -384,12 +380,7 @@ class Tester:
         logging.info(f"=====================================================")
         window_length = self.config['dataloader']['window_size']
         iterations = 5
-        
-        """
-        shouldn't be like this, but for now, just specify the path
-        """
-        ori_data_path = os.path.join('../Experiments_100', self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
-        
+        ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
         # self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
         self.ori_data = np.load(ori_data_path)
         self.fake_data = np.load(self.result_path)
@@ -497,9 +488,7 @@ class Tester:
             - analysis: tsne or pca
         """  
         window_length = self.config['dataloader']['window_size']
-        # ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
-        ori_data_path = os.path.join('../Experiments_100', self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
-        
+        ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
         # self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
         self.ori_data = np.load(ori_data_path)
         self.fake_data = np.load(self.result_path)
@@ -592,7 +581,7 @@ class Tester:
         self.testloader = DataLoader(dataset, batch_size=2048, shuffle=False)
         
     def _build_model(self):
-        self.model = GaussianProcess(self.config, self.device)
+        self.model = GaussianProcess_multifreq(self.config, self.device)
         checkpoint = torch.load(self.checkpoint)
         self.model.load_state_dict(checkpoint['ddpm'])
 
