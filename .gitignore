@@ -162,12 +162,16 @@ cython_debug/
 #.idea/
 
 data/
-Experiments/
 Imgs/
 Datas/
-Experiments_new/
 tmp/
-Experiments_100/
+
+Experiments/
 Experiments_100_genbylabel/
-Experiments_genbylabel_multifreq/
-Experiments_genbylabel_seed2/
+Experiments_100_unconditional/
+Experiments_1112_100/
+Experiments_1114_200_multifreqinside/
+Experiments_1115_100_multifreqinside/
+Experiments_1118_200/
+Experiments_new/
+

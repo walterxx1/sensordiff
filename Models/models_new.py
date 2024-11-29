@@ -10,89 +10,6 @@ from einops import rearrange
 from einops.layers.torch import Rearrange
 from einops_exts import rearrange_many, repeat_many
 
-# class TemporalBlock(nn.Module):
-#     def __init__(self, in_channels, out_channels, kernel_size, stride, dilation, padding, dropout=0.2):
-#         """
-#         A single temporal block in the TCN.
-
-#         Args:
-#             in_channels (int): Number of input channels.
-#             out_channels (int): Number of output channels.
-#             kernel_size (int): Size of the convolution kernel.
-#             stride (int): Stride of the convolution.
-#             dilation (int): Dilation factor.
-#             padding (int): Padding applied to the input.
-#             dropout (float): Dropout rate.
-#         """
-#         super(TemporalBlock, self).__init__()
-#         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation)
-#         self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=stride, padding=padding, dilation=dilation)
-#         # self.dropout = nn.Dropout(dropout)
-#         self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
-#         self.relu = nn.ReLU()
-#         self.norm1 = nn.BatchNorm1d(out_channels)
-#         self.norm2 = nn.BatchNorm1d(out_channels)
-
-#     def forward(self, x):
-#         """
-#         Forward pass through the temporal block.
-
-#         Args:
-#             x (torch.Tensor): Input tensor of shape (batch_size, in_channels, sequence_length).
-
-#         Returns:
-#             torch.Tensor: Output tensor of shape (batch_size, out_channels, sequence_length).
-#         """
-#         out = self.relu(self.norm1(self.conv1(x)))
-#         # out = self.dropout(out)
-#         out = self.relu(self.norm2(self.conv2(out)))
-#         # out = self.dropout(out)
-#         print('check dimension', out.shape, x.shape)
-#         # Residual connection
-#         res = x if self.downsample is None else self.downsample(x)
-#         return self.relu(out + res)
-
-# class TCN(nn.Module):
-#     def __init__(self, num_inputs, num_channels, kernel_size=3, dropout=0.2):
-#         """
-#         A Temporal Convolutional Network (TCN).
-
-#         Args:
-#             num_inputs (int): Number of input channels.
-#             num_channels (list): List of output channels for each temporal block.
-#             kernel_size (int): Kernel size for the convolutions.
-#             dropout (float): Dropout rate.
-#         """
-#         super(TCN, self).__init__()
-#         layers = []
-#         num_levels = len(num_channels)
-#         for i in range(num_levels):
-#             dilation_size = 2 ** i
-#             in_channels = num_inputs if i == 0 else num_channels[i-1]
-#             out_channels = num_channels[i]
-#             layers.append(TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
-#                                         padding=(kernel_size - 1) * dilation_size, dropout=dropout))
-#         self.network = nn.Sequential(*layers)
-#         self.pool = nn.AdaptiveAvgPool1d(1)  # Reduce the temporal dimension to 1
-#         self.flatten = nn.Flatten()
-
-#     def forward(self, x):
-#         """
-#         Forward pass through the TCN.
-
-#         Args:
-#             x (torch.Tensor): Input tensor of shape (batch_size, sequence_length, num_inputs).
-
-#         Returns:
-#             torch.Tensor: Output tensor of shape (batch_size, num_channels[-1]), a feature vector.
-#         """
-#         x = x.permute(0, 2, 1)  # Change shape to (batch_size, num_inputs, sequence_length)
-#         out = self.network(x)
-#         out = self.pool(out)  # Apply pooling to reduce temporal dimension
-#         out = self.flatten(out)  # Flatten to create a feature vector
-#         return out
-
-    
 """
 used in non-autoregression
 """
@@ -575,10 +492,10 @@ class Upsample(nn.Module):
         super().__init__()
         self.use_conv = use_conv
         if use_conv:
-            self.conv = nn.Conv1d(channels, channels, kernel_size=3, stride=1, padding=1)
+            self.conv = nn.Conv1d(channels, channels, kernel_size=3, padding=1)
 
     def forward(self, x):
-        # x = F.interpolate(x, scale_factor=2, mode="nearest")
+        x = F.interpolate(x, scale_factor=2, mode="nearest")
         if self.use_conv:
             x = self.conv(x)
         return x
@@ -588,7 +505,7 @@ class Downsample(nn.Module):
         super().__init__()
         self.use_conv = use_conv
         if use_conv:
-            self.op = nn.Conv1d(channels, channels, kernel_size=3, stride=1, padding=1)
+            self.op = nn.Conv1d(channels, channels, kernel_size=3, stride=2, padding=1)
         else:
             self.op = nn.AvgPool1d(stride=2)
 
@@ -601,7 +518,7 @@ class TimestepBlock(nn.Module):
     """
 
     @abstractmethod
-    def forward(self, ctx, x, t):
+    def forward(self, x, t):
         """
         Apply the module to `x` given `t` timestep embeddings.
         """
@@ -612,30 +529,26 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     A sequential module that passes timestep embeddings to the children that support it as an extra input.
     """
 
-    def forward(self, ctx, x, t):
+    def forward(self, x, t):
         for layer in self:
             if isinstance(layer, TimestepBlock):
-                x = layer(ctx, x, t)
+                x = layer(x, t)
             else:
                 x = layer(x)
         return x
-
+    
+    
 class ResidualBlock(TimestepBlock):
     def __init__(self, in_channels, out_channels, time_channels, dropout):
         super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        
         self.conv1 = nn.Sequential(norm_layer(in_channels), nn.SiLU(), nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1))
 
-        # self.conv1_ctx = nn.Sequential(norm_layer(in_channels), nn.SiLU(), nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1))
-        
         # pojection for time step embedding
         self.time_emb = nn.Sequential(nn.SiLU(), nn.Linear(time_channels, out_channels))
 
         # self.cross_attention = CrossAttention(dim=out_channels, context_dim=out_channels)
         
-        self.conv2 = nn.Sequential(norm_layer(out_channels*2), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels*2, out_channels, kernel_size=3, padding=1))
+        self.conv2 = nn.Sequential(norm_layer(out_channels), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1))
         # self.conv2 = nn.Sequential(norm_layer(out_channels), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1))
 
         if in_channels != out_channels:
@@ -643,188 +556,90 @@ class ResidualBlock(TimestepBlock):
         else:
             self.shortcut = nn.Identity()
 
-
-    def forward(self, ctx, x, t):
+    def forward(self, x, t):
         """
-        `ctx_x` has shape `[batch_size, in_dim, length]`
         `x` has shape `[batch_size, in_dim, length]`
         `t` has shape `[batch_size, time_dim]`
         """
         h = self.conv1(x)
-        # h_ctx = self.conv1_ctx(ctx)
-        # Add time step embeddings
+        # Add time step embeddings, condition has already been added in the time embedding
         h += self.time_emb(t)[:, :, None]
-        # att = self.cross_attention(h, ctx)
-        # h += att
-        # print('check 646', h.shape, ctx.shape)
         """
         h has shape `[batch_size, out_dim, length]`
         """
-        h = torch.concat((h, ctx), dim=1)
-        # pdb.set_trace()
         h = self.conv2(h)
         return h + self.shortcut(x)
 
-
-class UNetModel(nn.Module):
-    """
-    The full UNet model with attention and timestep embedding
-    """
-
-    def __init__(
-        self,
-        in_channels=3,
-        model_channels=128,
-        out_channels=3,
-        num_res_blocks=2,
-        attention_resolutions=(8, 16),
-        dropout=0,
-        channel_mult=(1, 1, 1, 1),
-        conv_resample=True,
-        num_heads=4,
-    ):
+class ResidualBlock_fftinside(TimestepBlock):
+    def __init__(self, in_channels, out_channels, time_channels, dropout):
         super().__init__()
+        self.conv1_m = nn.Sequential(norm_layer(in_channels), nn.SiLU(), nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1))
+        self.conv1_r = nn.Sequential(norm_layer(in_channels), nn.SiLU(), nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1))
 
-        self.in_channels = in_channels
-        self.model_channels = model_channels
-        self.out_channels = out_channels
-        self.num_res_blocks = num_res_blocks
-        self.attention_resolutions = attention_resolutions
-        self.dropout = dropout
-        self.channel_mult = channel_mult
-        self.conv_resample = conv_resample
-        self.num_heads = num_heads
+        # pojection for time step embedding
+        self.time_emb = nn.Sequential(nn.SiLU(), nn.Linear(time_channels, out_channels))
 
-        # time embedding
-        time_embed_dim = model_channels * 4
-        self.time_embed = nn.Sequential(
-            nn.Linear(model_channels, time_embed_dim),
-            nn.SiLU(),
-            nn.Linear(time_embed_dim, time_embed_dim),
-        )
-
-        self.ctx_conv1 = nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1)
-        self.ctx_conv2 = nn.Conv1d(in_channels, model_channels*2, kernel_size=3, padding=1)
+        # self.cross_attention = CrossAttention(dim=out_channels, context_dim=out_channels)
         
-        # down blocks
-        self.down_blocks = nn.ModuleList([TimestepEmbedSequential(nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1))])
-        down_block_chans = [model_channels]
-        ch = model_channels
-        ds = 1
-        for level, mult in enumerate(channel_mult):
-            for _ in range(num_res_blocks):
-                layers = [ResidualBlock(ch, mult * model_channels, time_embed_dim, dropout)]
-                ch = mult * model_channels
-                if ds in attention_resolutions:
-                    layers.append(AttentionBlock(ch, num_heads=num_heads))
-                self.down_blocks.append(TimestepEmbedSequential(*layers))
-                down_block_chans.append(ch)
-            if level != len(channel_mult) - 1:  # don't use downsample for the last stage
-                self.down_blocks.append(TimestepEmbedSequential(Downsample(ch, conv_resample)))
-                down_block_chans.append(ch)
-                ds *= 2
+        self.conv2_m = nn.Sequential(norm_layer(out_channels), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1))
+        self.conv2_r = nn.Sequential(norm_layer(out_channels), nn.SiLU(), nn.Dropout(p=dropout), nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1))
 
-        # middle block
-        self.middle_block = TimestepEmbedSequential(ResidualBlock(ch, ch, time_embed_dim, dropout), AttentionBlock(ch, num_heads=num_heads), ResidualBlock(ch, ch, time_embed_dim, dropout))
-        # up blocks
-        self.up_blocks = nn.ModuleList([])
-        for level, mult in list(enumerate(channel_mult))[::-1]:
-            for i in range(num_res_blocks + 1):
-                layers = [ResidualBlock(ch + down_block_chans.pop(), model_channels * mult, time_embed_dim, dropout)]
-                ch = model_channels * mult
-                if ds in attention_resolutions:
-                    layers.append(AttentionBlock(ch, num_heads=num_heads))
-                if level and i == num_res_blocks:
-                    layers.append(Upsample(ch, conv_resample))
-                    ds //= 2
-                self.up_blocks.append(TimestepEmbedSequential(*layers))
 
-        self.out = nn.Sequential(
-            norm_layer(ch),
-            nn.SiLU(),
-            nn.Conv1d(model_channels, out_channels, kernel_size=3, padding=1),
-        )
-
-    def forward(self, context: torch.FloatTensor, x: torch.FloatTensor, timesteps: torch.LongTensor):
-        """Apply the model to an input batch.
-
-        Args:
-            context (Tensor): [N x C x L]
-            x (Tensor): [N x C x L]
-            timesteps (Tensor): [N,] a 1-D batch of timesteps.
-
-        Returns:
-            Tensor: [N x C x ...]
-        """
-        hs = []
-        # down stage
-        h: torch.FloatTensor = x
-        h_ctx: torch.FloatTensor = context
-        t: torch.FloatTensor = self.time_embed(timestep_embedding(timesteps, self.model_channels))
-        h_ctx_1 = self.ctx_conv1(h_ctx)
-        # h_ctx_2 = self.ctx_conv2(h_ctx)
-        item = 0
-        for module in self.down_blocks:
-            # print('Down sample', item)
-            item += 1
-            h = module(h_ctx_1, h, t)
-            hs.append(h)
-        # middle stage
-        h = self.middle_block(h_ctx_1, h, t)
-        # up stage
-        item = 0
-        for module in self.up_blocks:
-            # print('Up sample', item, h.shape, hs[-1].shape)
-            item += 1
-            cat_in = torch.cat([h, hs.pop()], dim=1)
-            # print('Cat_in', cat_in.shape)
-            h = module(h_ctx_1, cat_in, t)
-        return self.out(h)
-
-    # def forward(self, x: torch.FloatTensor, t: torch.LongTensor, y: torch.LongTensor):
-    def forward_trend(self, context: torch.FloatTensor, x: torch.FloatTensor, timesteps: torch.LongTensor, trend:None):
-        """Apply the model to an input batch.
-
-        Args:
-            context (Tensor): [N x C x L]
-            x (Tensor): [N x C x L]
-            timesteps (Tensor): [N,] a 1-D batch of timesteps.
-
-        Returns:
-            Tensor: [N x C x ...]
-        """
-        hs = []
-        # down stage
-        h: torch.FloatTensor = x
-        h_ctx: torch.FloatTensor = context
-        t: torch.FloatTensor = self.time_embed(timestep_embedding(timesteps, self.model_channels))
-        
-        alpha = torch.rand(1, device=context.device)
-        if trend is not None:
-            h_ctx = alpha * h_ctx + (1-alpha) * trend
+        if in_channels != out_channels:
+            self.shortcut = nn.Conv1d(in_channels, out_channels, kernel_size=1)
         else:
-            h_ctx = alpha * h_ctx
+            self.shortcut = nn.Identity()
+
+    def fourier_split(self, x):
+        k = 3
+        original_length = x.shape[2]
+        x = x - x.mean(dim=2, keepdim=True)
         
-        h_ctx_1 = self.ctx_conv1(h_ctx)
-        # h_ctx_2 = self.ctx_conv2(h_ctx)
-        item = 0
-        for module in self.down_blocks:
-            # print('Down sample', item)
-            item += 1
-            h = module(h_ctx_1, h, t)
-            hs.append(h)
-        # middle stage
-        h = self.middle_block(h_ctx_1, h, t)
-        # up stage
-        item = 0
-        for module in self.up_blocks:
-            # print('Up sample', item, h.shape, hs[-1].shape)
-            item += 1
-            cat_in = torch.cat([h, hs.pop()], dim=1)
-            # print('Cat_in', cat_in.shape)
-            h = module(h_ctx_1, cat_in, t)
-        return self.out(h)
+        window = torch.hann_window(x.shape[2]).to(x.device)
+        x = x * window
         
+        z = torch.fft.rfft(x, dim=2)
+        
+        ks = torch.topk(z.abs(), k, dim=2)
+        top_k_indices = ks.indices
+        
+        mask = torch.zeros_like(z)
+        mask.scatter_(2, top_k_indices, 1)
+        
+        z_m = z * mask
+        
+        x_m = torch.fft.irfft(z_m, n=original_length, dim=2).real  # Main frequency components
+        # pdb.set_trace()
+        x_r = x - x_m
+        
+        return x_m, x_r
+        
+
+    def forward(self, x, t):
+        """
+        `x` has shape `[batch_size, in_dim, length]`
+        `t` has shape `[batch_size, time_dim]`
+        """
+        x_m, x_r = self.fourier_split(x)
+        
+        h_m = self.conv1_m(x_m)
+        h_r = self.conv1_r(x_r)
+        
+        h_m += self.time_emb(t)[:, :, None]
+        h_r += self.time_emb(t)[:, :, None]
+        
+        h_m = self.conv2_m(h_m)
+        h_r = self.conv2_r(h_r)
+        
+        h = h_m + h_r
+        # h = self.conv1(x)
+        # # Add time step embeddings, condition has already been added in the time embedding
+        # h += self.time_emb(t)[:, :, None]
+        # """
+        # h has shape `[batch_size, out_dim, length]`
+        # """
+        # h = self.conv2(h)
+        return h + self.shortcut(x)
 
 
 """
@@ -844,11 +659,10 @@ class UNetGenerate(nn.Module):
         num_res_blocks=2,
         attention_resolutions=(8, 16),
         dropout=0,
-        channel_mult=(1, 1, 1, 1),
+        channel_mult=(1, 2, 2),
         conv_resample=True,
         num_heads=4,
         label_num = 12,
-        seq_length = 100
     ):
         super().__init__()
 
@@ -871,14 +685,15 @@ class UNetGenerate(nn.Module):
         )
 
         # context embedding
-        self.ctx_conv1 = nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1)
+        # self.ctx_conv1 = nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1)
         # self.ctx_conv2 = nn.Conv1d(in_channels, model_channels*2, kernel_size=3, padding=1)
         
-        # condition embedding
-        # cond_dim = time_embed_dim
-        self.label_embedding = nn.Embedding(label_num, seq_length)
-        self.label_conv = nn.Sequential(nn.Conv1d(1, in_channels, kernel_size=3, stride=1, padding=1))
-        # self.to_label_tokens = nn.Linear(cond_dim, seq_length * in_channels)
+        self.label_embedding = nn.Embedding(label_num, time_embed_dim)
+        
+        """
+        Add an encoder for context to be similar as the LDM
+        """
+        
         
         # down blocks
         self.down_blocks = nn.ModuleList([TimestepEmbedSequential(nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1))])
@@ -919,6 +734,11 @@ class UNetGenerate(nn.Module):
                     ds //= 2
                 self.up_blocks.append(TimestepEmbedSequential(*layers))
 
+        """
+        Add an decoder for context to be similar as the LDM
+        """
+        
+
         self.out = nn.Sequential(
             norm_layer(ch),
             nn.SiLU(),
@@ -938,55 +758,29 @@ class UNetGenerate(nn.Module):
         Returns:
             Tensor: [N x C x ...]
         """
-        # label embedding
-        pdb.set_trace()
-        label = self.label_embedding(label).unsqueeze(1)
-        label_ctx = self.label_conv(label)
-        
-        
-        # print('check label shape', label_ctx.shape)
         hs = []
         # down stage
         h: torch.FloatTensor = x
-        # h_ctx: torch.FloatTensor = context
         t: torch.FloatTensor = self.time_embed(timestep_embedding(timesteps, self.model_channels))
-        h_ctx_1 = self.ctx_conv1(label_ctx)
-        # h_ctx_2 = self.ctx_conv2(h_ctx)
-        item = 0
+        """
+        label embedding
+        """
+        label_embed = self.label_embedding(label)
+        t += label_embed
+        # pdb.set_trace()
         for module in self.down_blocks:
-            # print('Down sample', item)
-            item += 1
-            h = module(h_ctx_1, h, t)
+            h = module(h, t)
             hs.append(h)
+            # print('check h shape', h.shape)
         # middle stage
-        h = self.middle_block(h_ctx_1, h, t)
+        h = self.middle_block(h, t)
         # up stage
-        item = 0
+        # pdb.set_trace()
         for module in self.up_blocks:
-            # print('Up sample', item, h.shape, hs[-1].shape)
-            item += 1
             cat_in = torch.cat([h, hs.pop()], dim=1)
-            # print('Cat_in', cat_in.shape)
-            h = module(h_ctx_1, cat_in, t)
+            h = module(cat_in, t)
+            # print(h.shape)
         return self.out(h)
-
-
-class TrendPredictor(nn.Module):
-    def __init__(self, input_dim, output_dim, seq_length):
-        super(TrendPredictor, self).__init__()
-        self.fc = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, output_dim * seq_length)
-        )
-        self.output_dim = output_dim
-        self.seq_length = seq_length
-
-    def forward(self, context, t):
-        out = self.fc(context)
-        return out.view(-1, self.output_dim, self.seq_length)
 
 
 # Example usage

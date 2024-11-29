@@ -81,7 +81,7 @@ def parse_args():
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='../Experiments_100_genbylabel')
+    parser.add_argument('--resultfolder', default='../Experiments_genbylabel_seed2')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -292,6 +292,10 @@ class Tester:
         
         self.result_path = os.path.join(self.folder_path, f"{args.activityname}_genbylabel.npy")
         self.checkpoint = os.path.join(self.folder_path, pt_path)
+        
+        logging.info(f"Using checkpoint: {self.checkpoint}")
+        logging.info(f"Using result path: {self.result_path}")
+        logging.info(f"Using activity: {self.activityname}")
         
         self.scaler_dict = dict()
         # self.result_folder = config['dataloader']['result_folder']

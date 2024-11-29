@@ -1,6 +1,6 @@
 model:
   model_name: uschad_gen_activity
-  seq_length: 100
+  seq_length: 200
   diff_num_steps: 500
   stride: 1
 
@@ -11,16 +11,16 @@ model:
 
 
 solver:
-  num_epochs: 500
+  num_epochs: 2000
   learning_rate: 1.0e-4
-  eval_each: 100
+  eval_each: 400
 
 dataloader:
   dataset_path: ../Datas/uschad_activity_dataset.h5
-  train_batch_size: 512
-  eval_batch_size: 512
+  train_batch_size: 256
+  eval_batch_size: 1024
 
-  window_size: 100
+  window_size: 200
   # step_size: 24
 
   # result_folder: ../Experiments_100_genbylabel/

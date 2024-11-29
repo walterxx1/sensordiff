@@ -1,13 +1,13 @@
 #!/bin/sh
 # help to train walking left by separately
 
-RESULT_FOLDER='genbylabel'
-FILE_NAME='main_genbylabel_multifreq.py'
-CONFIG_NAME='uschad_genbylabel'
-GPU=4
+RESULT_FOLDER='genbylabel_1118baseline_retrain'
+FILE_NAME='main_genbylabel_200.py'
+CONFIG_NAME='uschad_genbylabel_200'
+GPU=6
 
 # train
-python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --gpu $GPU --train
+# python $FILE_NAME --configname $CONFIG_NAME --foldername $RESULT_FOLDER --gpu $GPU --train
 
 # test
 ACTIVITY='elevatordown'

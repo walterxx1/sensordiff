@@ -14,7 +14,9 @@ import math
 import pdb
 import logging
 import numpy as np
+import pandas as pd
 
+import time
 import json
 import re
 import torch
@@ -27,7 +29,8 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 # from data_preprocess import data_prepare_generate_uschad
-from Models.diffusion import GaussianProcess_multifreq
+# from Models.diffusion import GaussianProcess_multifreq
+from Models.diffusion import GaussianProcess
 
 import sys
 # sys.path.append(os.path.join(os.path.dirname('__file__'), '../'))
@@ -68,20 +71,20 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Pytorch Training Script')
     
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--gpu', type=int, default=7,
+    parser.add_argument('--gpu', type=int, default=6,
                         help='GPU id to use, If given, only the specific gpu will be used, and'
                         'ddp will be disabled')
-    parser.add_argument('--configname', type=str, default='gpto1',
+    parser.add_argument('--configname', type=str, default='uschad_genbylabel',
                         help='path of config file')
     parser.add_argument('--train', action='store_true',
                         help='Set this flag to run training mode; omit for testing mode')
-    parser.add_argument('--foldername', type=str,
+    parser.add_argument('--foldername', type=str, default='genbylabel_multifreq',
                         help='experiment folder name')
     parser.add_argument('--testid', type=int, default=8,
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='../Experiments_genbylabel_multifreq')
+    parser.add_argument('--resultfolder', default='../Experiments_1118_200')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -148,28 +151,31 @@ class GenerateDataset(Dataset):
         
         self.labels = self.label_genbylabel
         
-    def __get_samples(self, data):
-        x = np.zeros((self.sample_num_total, self.window, self.var_num))
-        for i in range(0, self.sample_num_total):
-            # pdb.set_trace()
-            start = i * self.window
-            end = (i + 1) * self.window
-            x[i, :, :] = data[start:end, :]
+    # def __get_samples(self, data):
+    #     x = np.zeros((self.sample_num_total, self.window, self.var_num))
+    #     for i in range(0, self.sample_num_total):
+    #         # pdb.set_trace()
+    #         start = i * self.window
+    #         end = (i + 1) * self.window
+    #         x[i, :, :] = data[start:end, :]
         
-        # pdb.set_trace()
-        np.save(os.path.join(self.dir, f"{self.activityname}_ground_truth_{self.window}_train.npy"), self.unnormalize(x))
-        np.save(os.path.join(self.dir, f"{self.activityname}_norm_truth_{self.window}_train.npy"), unnormalize_to_zero_to_one(x))
+    #     # pdb.set_trace()
+    #     np.save(os.path.join(self.dir, f"{self.activityname}_ground_truth_{self.window}_train.npy"), self.unnormalize(x))
+    #     np.save(os.path.join(self.dir, f"{self.activityname}_norm_truth_{self.window}_train.npy"), unnormalize_to_zero_to_one(x))
 
-        return x
+    #     return x
         
     def read_data(self):
         with h5py.File(self.data_path, 'r') as f_r:
             data_grp = f_r['datas']
             dataset = data_grp[self.activityname][:]
             
-            self.dataset_genbylabel = f_r['data_genbylabel'][:]
-            self.label_genbylabel = f_r['label_genbylabel'][:]
-        
+            self.dataset_genbylabel = f_r['data_genbylabel_200'][:]
+            self.label_genbylabel = f_r['label_genbylabel_200'][:]
+
+            # self.dataset_genbylabel = f_r['data_genbylabel_100_neg1pos1'][:]
+            # self.label_genbylabel = f_r['label_genbylabel_100_neg1pos1'][:]
+            # pdb.set_trace()
         scaler = MinMaxScaler()
         scaler = scaler.fit(dataset)
         return dataset, scaler
@@ -218,15 +224,22 @@ class Trainer:
         min_eval_loss = float('inf')
         for epoch in range(1, self.config['solver']['num_epochs']+1):
             epoch_loss = 0.0
+            epoch_loss_r, epoch_loss_m = 0.0, 0.0
             for context, future in tqdm(self.train_loader,bar_format="{l_bar}{bar:20}{r_bar}",leave=True):
-                context, future = context.to(self.device), future.to(self.device)
+                context, future = context.to(self.device), future.to(self.device) # future (b, 100, 6)
                 self.optimizer.zero_grad()
-                # pdb.set_trace()
                 loss = self.model.get_loss_generate(context, future)
+                # loss = self.model.get_loss_generate_prednoise(context, future)
+                # loss = self.model.get_loss_generate_predimg(context, future)
+                
                 loss.backward()
                 self.optimizer.step()
                 epoch_loss += loss.item()
+                # epoch_loss_r += loss_r.item()
+                # epoch_loss_m += loss_m.item()
             epoch_loss /= len(self.train_loader)
+            # epoch_loss_r /= len(self.train_loader)
+            # epoch_loss_m /= len(self.train_loader)
             if min_eval_loss > epoch_loss:
                 min_eval_loss = epoch_loss
                 check_point = {
@@ -238,6 +251,7 @@ class Trainer:
             if epoch % self.config['solver']['eval_each'] == 0:
                 torch.save(check_point, pt_path)
             
+            # logging.info(f"Epoch [{epoch}/{self.config['solver']['num_epochs']}], loss: {epoch_loss:.4f}, loss_r: {epoch_loss_r:.4f}, loss_m: {epoch_loss_m:.4f}")
             logging.info(f"Epoch [{epoch}/{self.config['solver']['num_epochs']}], loss: {epoch_loss:.4f}")
     
     def _build_train_loader(self):
@@ -246,7 +260,8 @@ class Trainer:
         logging.info('> Train loader built!')
     
     def _build_model(self):
-        self.model = GaussianProcess_multifreq(self.config, self.device)
+        # self.model = GaussianProcess_multifreq(self.config, self.device)
+        self.model = GaussianProcess(self.config, self.device)
         
     def _build_optimizer(self):
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.config['solver']['learning_rate'], weight_decay=1e-5)
@@ -284,11 +299,14 @@ class Tester:
         self.args = args
         self.device = device
         self.activityname = args.activityname
+        
+        # when testing, the foldername should be the activityname, inorder to save the result into the activityname named folder
         self.folder_path = os.path.join(args.resultfolder, args.foldername)
         pt_path, testid = self._find_recent_pth()
-        
+        logging.info(f"Loading model from {pt_path}")
         self.result_path = os.path.join(self.folder_path, f"{args.activityname}_genbylabel.npy")
         self.checkpoint = os.path.join(self.folder_path, pt_path)
+        logging.info(f"Loading model from {self.checkpoint}")
         
         self.scaler_dict = dict()
         self.result_folder = args.resultfolder
@@ -328,6 +346,8 @@ class Tester:
                 # context = torch.zeros_like(context).to(self.device)
                 context = context.to(self.device)
                 # pdb.set_trace()
+                # _, samples = self.model.sample_generate_predimg(context)
+                # _, samples = self.model.sample_generate_prednoise(context)
                 _, samples = self.model.sample_generate(context)
                 sample_list.append(samples.detach().cpu().numpy())
                 
@@ -363,7 +383,7 @@ class Tester:
         data_path = self.config['dataloader']['dataset_path']
         with h5py.File(data_path, 'r') as f_r:
             datagrp = f_r['datas']
-            label_list = f_r['label_genbylabel'][:]
+            label_list = f_r['label_genbylabel_200'][:]
             activity_count = np.sum(label_list == activity_label[self.activityname]-1)
         self.activity_list = torch.full((activity_count,), activity_label_num, dtype=torch.long)
         # pdb.set_trace()
@@ -381,9 +401,14 @@ class Tester:
         window_length = self.config['dataloader']['window_size']
         iterations = 5
         ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
+        # pdb.set_trace()
         # self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
+        # ori_data_path = os.path.join('../Experiments_100', self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
         self.ori_data = np.load(ori_data_path)
         self.fake_data = np.load(self.result_path)
+        
+        # time for context-fid
+        start_time_fid = time.time()
         
         result_dict = {}
         context_fid_score = []
@@ -404,6 +429,12 @@ class Tester:
         # contextfid_score_mean = display_scores(context_fid_score)
         # logging.info(f"Final context-fid score : , {contextfid_score_mean}")
         
+        end_time_fid = time.time()
+        logging.info(f"Time for context-fid: {end_time_fid - start_time_fid}")
+        
+        # time for correlation
+        start_time_corr = time.time()
+        
         """
         Correlation score
         """
@@ -421,18 +452,23 @@ class Tester:
             logging.info(f"Iter {i}: , cross-correlation = , {loss.item()}")
             
         corr_mean, corr_sigma = display_scores(correlational_score)
-        logging.info(f"Final context-fid score: {corr_mean}, {corr_sigma}")
+        logging.info(f"Final correlation score: {corr_mean}, {corr_sigma}")
 
         corr_dict = {}
         corr_dict['mean'] = corr_mean
         corr_dict['sigma'] = corr_sigma
         result_dict['correlation'] = corr_dict
 
+        end_time_corr = time.time()
+        logging.info(f"Time for correlation: {end_time_corr - start_time_corr}")
+
         # corr_score_mean = display_scores(correlational_score)
         # logging.info(f"Final correlation score : , {corr_score_mean}")
     
+        start_time_disc = time.time()
+        
         """
-        Discriminative score and Predictive score
+        Discriminative score
         """
         discriminative_score = []
 
@@ -451,8 +487,17 @@ class Tester:
         disc_dict['sigma'] = disc_sigma
         result_dict['discriminative'] = disc_dict
 
+        end_time_disc = time.time()
+        logging.info(f"Time for discriminative: {end_time_disc - start_time_disc}")
+
         # discriminative_score_mean = display_scores(discriminative_score)
         # logging.info(f"Final discriminative score : {discriminative_score_mean}")
+        
+        start_time_pred = time.time()
+        
+        """
+        Predictive score 
+        """
         
         predictive_score = []
         for i in range(iterations):
@@ -468,6 +513,9 @@ class Tester:
         pred_dict['sigma'] = pred_sigma
         result_dict['predictive'] = pred_dict
         
+        end_time_pred = time.time()
+        logging.info(f"Time for predictive: {end_time_pred - start_time_pred}")
+        
         # pred_score_mean = display_scores(predictive_score)
         # logging.info(f"Final Predictive score : {pred_score_mean}")
 
@@ -479,6 +527,7 @@ class Tester:
         with open(json_path, 'w') as file:
             json.dump(file_dict, file, indent=4)
     
+
     def visualization(self, analysis='tsne'):
         """Using PCA or tSNE for generated and original data visualization.
         
@@ -489,87 +538,64 @@ class Tester:
         """  
         window_length = self.config['dataloader']['window_size']
         ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
-        # self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
+        img_path = os.path.join(self.folder_path, self.activityname+'_genbylabel.png')
+        
         self.ori_data = np.load(ori_data_path)
         self.fake_data = np.load(self.result_path)
-        # pdb.set_trace()
         
         ori_data = self.ori_data
         generated_data = self.fake_data
         
-        # Analysis sample size (for faster computation)
-        anal_sample_no = min([1000, len(ori_data)])
-        idx = np.random.permutation(len(ori_data))[:anal_sample_no]
-            
-        # Data preprocessing
-        ori_data = np.asarray(ori_data)
-        generated_data = np.asarray(generated_data)  
+        samples1_name = 'Original'
+        samples2_name = 'Generated'
+
+        samples1_2d = np.mean(ori_data, axis=2)
+        samples2_2d = np.mean(generated_data, axis=2)
         
-        ori_data = ori_data[idx]
-        generated_data = generated_data[idx]
+        print(samples1_2d.shape, samples2_2d.shape)
+
+        # num of samples used in the t-SNE plot
+        used_samples = min(samples1_2d.shape[0], samples2_2d.shape[0])
+
+        # Combine the original and generated samples
+        combined_samples = np.vstack(
+            [samples1_2d[:used_samples], samples2_2d[:used_samples]]
+        )
+
+        # Compute the t-SNE of the combined samples
+        tsne = TSNE(n_components=2, perplexity=40, n_iter=300, random_state=42)
+        tsne_samples = tsne.fit_transform(combined_samples)
+
+        # Create a DataFrame for the t-SNE samples
+        tsne_df = pd.DataFrame(
+            {
+                "tsne_1": tsne_samples[:, 0],
+                "tsne_2": tsne_samples[:, 1],
+                "sample_type": [samples1_name] * used_samples
+                + [samples2_name] * used_samples,
+            }
+        )
+
+        # Plot the t-SNE samples
+        plt.figure(figsize=(8, 8))
+        for sample_type, color in zip([samples1_name, samples2_name], ["red", "blue"]):
+            if sample_type is not None:
+                indices = tsne_df["sample_type"] == sample_type
+                plt.scatter(
+                    tsne_df.loc[indices, "tsne_1"],
+                    tsne_df.loc[indices, "tsne_2"],
+                    label=sample_type,
+                    color=color,
+                    alpha=0.2,
+                    s=100,
+                )
+
+        plt.title(f"t-SNE for {self.activityname}")
+        plt.xlabel('x-tsne')
+        plt.ylabel('y_tsne')
+        plt.legend()
+        plt.savefig(img_path)
         
-        no, seq_len, dim = ori_data.shape  
-        
-        for i in range(anal_sample_no):
-            if (i == 0):
-                prep_data = np.reshape(np.mean(ori_data[0,:,:], 1), [1,seq_len])
-                prep_data_hat = np.reshape(np.mean(generated_data[0,:,:],1), [1,seq_len])
-            else:
-                prep_data = np.concatenate((prep_data, 
-                                            np.reshape(np.mean(ori_data[i,:,:],1), [1,seq_len])))
-                prep_data_hat = np.concatenate((prep_data_hat, 
-                                                np.reshape(np.mean(generated_data[i,:,:],1), [1,seq_len])))
-            
-        # Visualization parameter        
-        colors = ["red" for i in range(anal_sample_no)] + ["blue" for i in range(anal_sample_no)]    
-            
-        if analysis == 'pca':
-            # PCA Analysis
-            pca = PCA(n_components = 2)
-            pca.fit(prep_data)
-            pca_results = pca.transform(prep_data)
-            pca_hat_results = pca.transform(prep_data_hat)
-            
-            # Plotting
-            f, ax = plt.subplots(1)    
-            plt.scatter(pca_results[:,0], pca_results[:,1],
-                        c = colors[:anal_sample_no], alpha = 0.2, label = "Original")
-            plt.scatter(pca_hat_results[:,0], pca_hat_results[:,1], 
-                        c = colors[anal_sample_no:], alpha = 0.2, label = "Synthetic")
-        
-            ax.legend()  
-            plt.title('PCA plot')
-            plt.xlabel('x-pca')
-            plt.ylabel('y_pca')
-            plt.show()
-            
-        elif analysis == 'tsne':
-            
-            # Do t-SNE Analysis together       
-            prep_data_final = np.concatenate((prep_data, prep_data_hat), axis = 0)
-            
-            # TSNE anlaysis
-            tsne = TSNE(n_components = 2, verbose = 1, perplexity = 40, n_iter = 300)
-            tsne_results = tsne.fit_transform(prep_data_final)
-            
-            # Plotting
-            f, ax = plt.subplots(1)
-            
-            plt.scatter(tsne_results[:anal_sample_no,0], tsne_results[:anal_sample_no,1], 
-                        c = colors[:anal_sample_no], alpha = 0.2, label = "Original")
-            plt.scatter(tsne_results[anal_sample_no:,0], tsne_results[anal_sample_no:,1], 
-                        c = colors[anal_sample_no:], alpha = 0.2, label = "Synthetic")
-        
-            ax.legend()
-            
-            img_path = os.path.join(self.folder_path, self.activityname+'_genbylabel.png')
-            
-            plt.title('t-SNE plot')
-            plt.xlabel('x-tsne')
-            plt.ylabel('y_tsne')
-            plt.savefig(img_path, format='png', dpi=300)
-            plt.show()
-            
 
     def _build(self):
         self._build_model()
@@ -581,7 +607,8 @@ class Tester:
         self.testloader = DataLoader(dataset, batch_size=2048, shuffle=False)
         
     def _build_model(self):
-        self.model = GaussianProcess_multifreq(self.config, self.device)
+        self.model = GaussianProcess(self.config, self.device)
+        # self.model = GaussianProcess_multifreq(self.config, self.device)
         checkpoint = torch.load(self.checkpoint)
         self.model.load_state_dict(checkpoint['ddpm'])
 
@@ -615,6 +642,27 @@ def build_log(args):
         ]
     )
     logging.info('> Logger built')
+
+
+def sava_activity_data(data_path, folder_path, activityname, window, var_num):
+    with h5py.File(data_path, 'r') as f_r:
+        data_grp = f_r['datas']
+        dataset = data_grp[activityname][:]
+        
+    scaler = MinMaxScaler()
+    dataset = scaler.fit_transform(dataset)
+    
+    sample_num_total = (dataset.shape[0] - window + 1) // window
+    x = np.zeros((sample_num_total, window, var_num))
+    
+    for i in range(0, sample_num_total):
+        # pdb.set_trace()
+        start = i * window
+        end = (i + 1) * window
+        x[i, :, :] = dataset[start:end, :]
+    
+    np.save(os.path.join(folder_path, f"{activityname}_norm_truth_{window}_train.npy"), x)
+    return
 
 
 def main():
@@ -673,10 +721,21 @@ def main():
                 empty_dict = {}
                 json.dump(empty_dict, file, indent=4)
         
+        activityfolder = os.path.join(args.resultfolder, args.activityname)
+        
+        # if there is no such folder, create one
+        if not os.path.exists(activityfolder):
+            os.makedirs(activityfolder, exist_ok=True)
+            sava_activity_data(config['dataloader']['dataset_path'], activityfolder, args.activityname, config['dataloader']['window_size'], 6)
+        
         tester = Tester(config, args, device)
+        start_time = time.time()
         tester.test()
-        tester.show_results(json_path)
-        tester.visualization(analysis='tsne')
+        end_time = time.time()
+        print(f"Testing time: {end_time - start_time}")
+        
+        # tester.show_results(json_path)
+        # tester.visualization(analysis='tsne')
     
     # result_show = evaluation()
     

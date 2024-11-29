@@ -14,6 +14,8 @@ import math
 import pdb
 import logging
 import numpy as np
+
+import time
 import json
 import re
 import torch
@@ -26,6 +28,7 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 # from data_preprocess import data_prepare_generate_uschad
+# from Models.diffusion import GaussianProcess_multifreq
 from Models.diffusion import GaussianProcess
 
 import sys
@@ -70,17 +73,17 @@ def parse_args():
     parser.add_argument('--gpu', type=int, default=6,
                         help='GPU id to use, If given, only the specific gpu will be used, and'
                         'ddp will be disabled')
-    parser.add_argument('--configname', type=str, default='gpto1',
+    parser.add_argument('--configname', type=str, default='uschad_genbylabel',
                         help='path of config file')
     parser.add_argument('--train', action='store_true',
                         help='Set this flag to run training mode; omit for testing mode')
-    parser.add_argument('--foldername', type=str,
+    parser.add_argument('--foldername', type=str, default='genbylabel_multifreq',
                         help='experiment folder name')
     parser.add_argument('--testid', type=int, default=8,
                         help='Specify which pytorch parameter')
     parser.add_argument('--samplecnt', type=int, default=2,
                         help='how many samples of each activity')
-    parser.add_argument('--resultfolder', default='../Experiments_100')
+    parser.add_argument('--resultfolder', default='../Experiments_1112_100')
     parser.add_argument('--activityname', type=str, default='walkingforward',
                         help='activity name')
     
@@ -128,7 +131,6 @@ class GenerateDataset(Dataset):
     def __init__(self, args, config) -> None:
         super().__init__()
         self.data_path = config['dataloader']['dataset_path']
-        # self.result_folder = config['dataloader']['result_folder']
         self.result_folder = args.resultfolder
         self.activityname = args.activityname
 
@@ -137,35 +139,45 @@ class GenerateDataset(Dataset):
             os.makedirs(self.dir, exist_ok=True)
         
         self.window = config['dataloader']['window_size']
+        _, self.scaler = self.read_data()
 
-        rawdata, self.scaler = self.read_data()
-        self.len, self.var_num = rawdata.shape[0], rawdata.shape[-1]
-        # self.sample_num_total = max(self.len - self.window + 1, 0)
-        self.sample_num_total = max((self.len - self.window + 1) // self.window, 0)
-        
-        self.data = self.__normalize(rawdata)
-        self.samples = self.__get_samples(self.data)
+        """
+        samples and labels are already splitted and saved
+        get them and use them directly
+        """
+        self.samples = self.dataset_genbylabel
         self.sample_num = self.samples.shape[0]
         
-    def __get_samples(self, data):
-        x = np.zeros((self.sample_num_total, self.window, self.var_num))
-        for i in range(0, self.sample_num_total):
-            # pdb.set_trace()
-            start = i * self.window
-            end = (i + 1) * self.window
-            x[i, :, :] = data[start:end, :]
+        self.labels = self.label_genbylabel
         
-        # pdb.set_trace()
-        np.save(os.path.join(self.dir, f"{self.activityname}_ground_truth_{self.window}_train.npy"), self.unnormalize(x))
-        np.save(os.path.join(self.dir, f"{self.activityname}_norm_truth_{self.window}_train.npy"), unnormalize_to_zero_to_one(x))
+    # def __get_samples(self, data):
+    #     x = np.zeros((self.sample_num_total, self.window, self.var_num))
+    #     for i in range(0, self.sample_num_total):
+    #         # pdb.set_trace()
+    #         start = i * self.window
+    #         end = (i + 1) * self.window
+    #         x[i, :, :] = data[start:end, :]
+        
+    #     # pdb.set_trace()
+    #     np.save(os.path.join(self.dir, f"{self.activityname}_ground_truth_{self.window}_train.npy"), self.unnormalize(x))
+    #     np.save(os.path.join(self.dir, f"{self.activityname}_norm_truth_{self.window}_train.npy"), unnormalize_to_zero_to_one(x))
 
-        return x
+    #     return x
         
     def read_data(self):
         with h5py.File(self.data_path, 'r') as f_r:
             data_grp = f_r['datas']
             dataset = data_grp[self.activityname][:]
-        
+            
+            # self.dataset_genbylabel = f_r['data_genbylabel_200'][:]
+            # self.label_genbylabel = f_r['label_genbylabel_200'][:]
+            
+            self.dataset_genbylabel = f_r['data_genbylabel'][:]
+            self.label_genbylabel = f_r['label_genbylabel'][:]
+
+            # self.dataset_genbylabel = f_r['data_genbylabel_100_neg1pos1'][:]
+            # self.label_genbylabel = f_r['label_genbylabel_100_neg1pos1'][:]
+            # pdb.set_trace()
         scaler = MinMaxScaler()
         scaler = scaler.fit(dataset)
         return dataset, scaler
@@ -194,7 +206,8 @@ class GenerateDataset(Dataset):
     
     def __getitem__(self, index):
         x = self.samples[index, :, :]
-        return torch.from_numpy(x).float(), torch.from_numpy(x).float()
+        label = self.labels[index]
+        return torch.tensor(label, dtype=torch.long), torch.from_numpy(x).float()
 
 
 """
@@ -213,29 +226,34 @@ class Trainer:
         min_eval_loss = float('inf')
         for epoch in range(1, self.config['solver']['num_epochs']+1):
             epoch_loss = 0.0
+            epoch_loss_r, epoch_loss_m = 0.0, 0.0
             for context, future in tqdm(self.train_loader,bar_format="{l_bar}{bar:20}{r_bar}",leave=True):
-                future = future.to(self.device)
-                context = torch.zeros_like(future).to(self.device)
-                # print('check shape', context.shape, future.shape)
+                context, future = context.to(self.device), future.to(self.device) # future (b, 100, 6)
                 self.optimizer.zero_grad()
-                loss = self.model.get_loss(context, future)
+                loss = self.model.get_loss_generate(context, future)
+                # loss = self.model.get_loss_generate_prednoise(context, future)
+                # loss = self.model.get_loss_generate_predimg(context, future)
+                
                 loss.backward()
                 self.optimizer.step()
                 epoch_loss += loss.item()
+                # epoch_loss_r += loss_r.item()
+                # epoch_loss_m += loss_m.item()
             epoch_loss /= len(self.train_loader)
-            
+            # epoch_loss_r /= len(self.train_loader)
+            # epoch_loss_m /= len(self.train_loader)
             if min_eval_loss > epoch_loss:
                 min_eval_loss = epoch_loss
                 check_point = {
                     'ddpm': self.model.state_dict()
                 }
-                # pt_folder = os.path.join(self.config['dataloader']['result_folder'], self.args.activityname)
-                pt_folder = os.path.join(self.args.resultfolder, self.args.activityname)
-                pt_path = os.path.join(pt_folder, f"{self.args.activityname}_ep{epoch}.pt")
-                
+                pt_folder = os.path.join(self.args.resultfolder, self.args.foldername)
+                pt_path = os.path.join(pt_folder, f"genbylabel_ep{epoch}.pt")
+            # pdb.set_trace()
             if epoch % self.config['solver']['eval_each'] == 0:
                 torch.save(check_point, pt_path)
             
+            # logging.info(f"Epoch [{epoch}/{self.config['solver']['num_epochs']}], loss: {epoch_loss:.4f}, loss_r: {epoch_loss_r:.4f}, loss_m: {epoch_loss_m:.4f}")
             logging.info(f"Epoch [{epoch}/{self.config['solver']['num_epochs']}], loss: {epoch_loss:.4f}")
     
     def _build_train_loader(self):
@@ -244,6 +262,7 @@ class Trainer:
         logging.info('> Train loader built!')
     
     def _build_model(self):
+        # self.model = GaussianProcess_multifreq(self.config, self.device)
         self.model = GaussianProcess(self.config, self.device)
         
     def _build_optimizer(self):
@@ -282,23 +301,26 @@ class Tester:
         self.args = args
         self.device = device
         self.activityname = args.activityname
+        
+        # when testing, the foldername should be the activityname, inorder to save the result into the activityname named folder
         self.folder_path = os.path.join(args.resultfolder, args.foldername)
         pt_path, testid = self._find_recent_pth()
-        # pt_path = 'runningforward_ep999.pt'
-        # pdb.set_trace()
-        self.result_path = os.path.join(self.folder_path, f"{args.activityname}.npy")
+        logging.info(f"Loading model from {pt_path}")
+        self.result_path = os.path.join(self.folder_path, f"{args.activityname}_genbylabel.npy")
         self.checkpoint = os.path.join(self.folder_path, pt_path)
+        logging.info(f"Loading model from {self.checkpoint}")
         
         self.scaler_dict = dict()
-        # self.result_folder = config['dataloader']['result_folder']
+        self.result_folder = args.resultfolder
         self._build()
     
     def _find_recent_pth(self):
         # List all files in the directory
+        # pdb.set_trace()
         files = os.listdir(self.folder_path)
         
         # Filter out .pt files
-        pt_files = [f for f in files if f.endswith('.pt')]
+        pt_files = [f for f in files if 'genbylabel' in f and f.endswith('.pt')]
         
         # If no .pt files found, return None
         if not pt_files:
@@ -319,17 +341,21 @@ class Tester:
         return pt_files[0], testid
     
     def test(self):
-        # self.activity_folder = os.path.join(self.result_folder, self.args.foldername)
-        
         sample_list = []
+        
         with torch.no_grad():
-            for context, _ in tqdm(self.testloader,bar_format="{l_bar}{bar:20}{r_bar}",leave=True):
-                context = torch.zeros_like(context).to(self.device)
-                _, samples = self.model.sample(context)
+            for context in tqdm(self.activity_batches,bar_format="{l_bar}{bar:20}{r_bar}",leave=True):
+                # context = torch.zeros_like(context).to(self.device)
+                context = context.to(self.device)
+                # pdb.set_trace()
+                # _, samples = self.model.sample_generate_predimg(context)
+                # _, samples = self.model.sample_generate_prednoise(context)
+                _, samples = self.model.sample_generate(context)
                 sample_list.append(samples.detach().cpu().numpy())
-                # break
+                
         samples = np.vstack(sample_list)
         samples = unnormalize_to_zero_to_one(samples)
+        
         # print(samples.shape)
         # result_path = os.path.join(self.folder_path, self.activityname+'.npy')
         np.save(self.result_path , samples)
@@ -339,17 +365,52 @@ class Tester:
         select_idx = np.random.randint(low=0, high=size, size=(num_select,))
         return select_idx
 
+    def _create_sample_list(self):
+        activity_label = {
+            'walkingforward': 1,
+            'walkingleft': 2,
+            'walkingright': 3,
+            'walkingupstairs': 4,
+            'walkingdownstairs': 5,
+            'runningforward': 6,
+            'jumping': 7,
+            'sitting': 8,
+            'standing': 9,
+            'sleeping': 10,
+            'elevatorup': 11,
+            'elevatordown': 12
+        }
+        activity_label_num = activity_label[self.activityname]-1
+        
+        data_path = self.config['dataloader']['dataset_path']
+        with h5py.File(data_path, 'r') as f_r:
+            datagrp = f_r['datas']
+            label_list = f_r['label_genbylabel'][:]
+            activity_count = np.sum(label_list == activity_label[self.activityname]-1)
+        self.activity_list = torch.full((activity_count,), activity_label_num, dtype=torch.long)
+        # pdb.set_trace()
+        batch_size = self.config['dataloader']['eval_batch_size']
+        self.activity_batches = torch.split(self.activity_list, batch_size)
+
     def show_results(self, json_path):
+        # pdb.set_trace()
         """
         Context-FID score
         """
         logging.info(f"=====================================================")
         logging.info(f"Below is the Metrics of {self.activityname}!")
         logging.info(f"=====================================================")
-        window_size = self.config['dataloader']['window_size']
+        window_length = self.config['dataloader']['window_size']
         iterations = 5
-        self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_{window_size}_train.npy'))
+        ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
+        # pdb.set_trace()
+        # self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
+        # ori_data_path = os.path.join('../Experiments_100', self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
+        self.ori_data = np.load(ori_data_path)
         self.fake_data = np.load(self.result_path)
+        
+        # time for context-fid
+        start_time_fid = time.time()
         
         result_dict = {}
         context_fid_score = []
@@ -358,14 +419,23 @@ class Tester:
             context_fid = Context_FID(self.ori_data[:], self.fake_data[:self.ori_data.shape[0]])
             context_fid_score.append(context_fid)
             logging.info(f"Iter {i}: context-fid = {context_fid}")
-        contextfid_score_mean = display_scores(context_fid_score)
-        logging.info(f"Final context-fid score : , {contextfid_score_mean}")
+            
+        fid_mean, fid_sigma = display_scores(context_fid_score)
+        logging.info(f"Final context-fid score: {fid_mean}, {fid_sigma}")
         
-        fid_mean, fid_sigma = contextfid_score_mean
         fid_dict = {}
         fid_dict['mean'] = fid_mean
         fid_dict['sigma'] = fid_sigma
         result_dict['context-fid'] = fid_dict
+        
+        # contextfid_score_mean = display_scores(context_fid_score)
+        # logging.info(f"Final context-fid score : , {contextfid_score_mean}")
+        
+        end_time_fid = time.time()
+        logging.info(f"Time for context-fid: {end_time_fid - start_time_fid}")
+        
+        # time for correlation
+        start_time_corr = time.time()
         
         """
         Correlation score
@@ -382,18 +452,25 @@ class Tester:
             loss = corr.compute(x_fake[fake_idx, :, :])
             correlational_score.append(loss.item())
             logging.info(f"Iter {i}: , cross-correlation = , {loss.item()}")
+            
+        corr_mean, corr_sigma = display_scores(correlational_score)
+        logging.info(f"Final correlation score: {corr_mean}, {corr_sigma}")
 
-        corr_score_mean = display_scores(correlational_score)
-        logging.info(f"Final correlation score : , {corr_score_mean}")
-    
-        corr_mean, corr_sigma = corr_score_mean
         corr_dict = {}
         corr_dict['mean'] = corr_mean
         corr_dict['sigma'] = corr_sigma
         result_dict['correlation'] = corr_dict
+
+        end_time_corr = time.time()
+        logging.info(f"Time for correlation: {end_time_corr - start_time_corr}")
+
+        # corr_score_mean = display_scores(correlational_score)
+        # logging.info(f"Final correlation score : , {corr_score_mean}")
     
+        start_time_disc = time.time()
+        
         """
-        Discriminative score and Predictive score
+        Discriminative score
         """
         discriminative_score = []
 
@@ -403,32 +480,47 @@ class Tester:
             discriminative_score.append(temp_disc)
             # logging.info(f'Iter {i}: ', temp_disc, ',', fake_acc, ',', real_acc, '\n')
             logging.info(f"Iter {i}: , {temp_disc}")
-            
-        discriminative_score_mean = display_scores(discriminative_score)
-        logging.info(f"Final discriminative score : {discriminative_score_mean}")
         
-        disc_mean, disc_sigma = discriminative_score_mean
+        disc_mean, disc_sigma = display_scores(discriminative_score)
+        logging.info(f"Final discriminative score : {disc_mean}, {disc_sigma}")
+
         disc_dict = {}
         disc_dict['mean'] = disc_mean
         disc_dict['sigma'] = disc_sigma
         result_dict['discriminative'] = disc_dict
+
+        end_time_disc = time.time()
+        logging.info(f"Time for discriminative: {end_time_disc - start_time_disc}")
+
+        # discriminative_score_mean = display_scores(discriminative_score)
+        # logging.info(f"Final discriminative score : {discriminative_score_mean}")
+        
+        start_time_pred = time.time()
+        
+        """
+        Predictive score 
+        """
         
         predictive_score = []
         for i in range(iterations):
             temp_pred = predictive_score_metrics(self.ori_data, self.fake_data[:self.ori_data.shape[0]], self.device)
             predictive_score.append(temp_pred)
             logging.info(f"Iter {i}, epoch : {temp_pred}")
-            
-        pred_score_mean = display_scores(predictive_score)
-        logging.info(f"Final Predictive score : {pred_score_mean}")
-    
-    
-        pred_mean, pred_sigma = pred_score_mean
+        
+        pred_mean, pred_sigma = display_scores(predictive_score)
+        logging.info(f"Final discriminative score : {pred_mean}, {pred_sigma}")
+        
         pred_dict = {}
         pred_dict['mean'] = pred_mean
         pred_dict['sigma'] = pred_sigma
         result_dict['predictive'] = pred_dict
-    
+        
+        end_time_pred = time.time()
+        logging.info(f"Time for predictive: {end_time_pred - start_time_pred}")
+        
+        # pred_score_mean = display_scores(predictive_score)
+        # logging.info(f"Final Predictive score : {pred_score_mean}")
+
         with open(json_path, 'r') as file:
             file_dict = json.load(file)
         
@@ -436,7 +528,6 @@ class Tester:
         
         with open(json_path, 'w') as file:
             json.dump(file_dict, file, indent=4)
-    
     
     def visualization(self, analysis='tsne'):
         """Using PCA or tSNE for generated and original data visualization.
@@ -446,9 +537,13 @@ class Tester:
             - generated_data: generated synthetic data
             - analysis: tsne or pca
         """  
-        window_size = self.config['dataloader']['window_size']
-        self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_{window_size}_train.npy'))
+        window_length = self.config['dataloader']['window_size']
+        ori_data_path = os.path.join(self.args.resultfolder, self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
+        # self.ori_data = np.load(os.path.join(self.folder_path, f'{self.args.activityname}_norm_truth_24_train.npy'))
+        # ori_data_path = os.path.join('../Experiments_100', self.activityname, f'{self.args.activityname}_norm_truth_{window_length}_train.npy')
+        self.ori_data = np.load(ori_data_path)
         self.fake_data = np.load(self.result_path)
+        # pdb.set_trace()
         
         ori_data = self.ori_data
         generated_data = self.fake_data
@@ -518,7 +613,7 @@ class Tester:
         
             ax.legend()
             
-            img_path = os.path.join(self.folder_path, self.activityname+'.png')
+            img_path = os.path.join(self.folder_path, self.activityname+'_genbylabel.png')
             
             plt.title('t-SNE plot')
             plt.xlabel('x-tsne')
@@ -529,7 +624,8 @@ class Tester:
 
     def _build(self):
         self._build_model()
-        self._get_samples()
+        self._create_sample_list()
+        # self._get_samples()
     
     def _get_samples(self):
         dataset = GenerateDataset(self.args, self.config)
@@ -537,6 +633,7 @@ class Tester:
         
     def _build_model(self):
         self.model = GaussianProcess(self.config, self.device)
+        # self.model = GaussianProcess_multifreq(self.config, self.device)
         checkpoint = torch.load(self.checkpoint)
         self.model.load_state_dict(checkpoint['ddpm'])
 
@@ -570,6 +667,27 @@ def build_log(args):
         ]
     )
     logging.info('> Logger built')
+
+
+def sava_activity_data(data_path, folder_path, activityname, window, var_num):
+    with h5py.File(data_path, 'r') as f_r:
+        data_grp = f_r['datas']
+        dataset = data_grp[activityname][:]
+        
+    scaler = MinMaxScaler()
+    dataset = scaler.fit_transform(dataset)
+    
+    sample_num_total = (dataset.shape[0] - window + 1) // window
+    x = np.zeros((sample_num_total, window, var_num))
+    
+    for i in range(0, sample_num_total):
+        # pdb.set_trace()
+        start = i * window
+        end = (i + 1) * window
+        x[i, :, :] = dataset[start:end, :]
+    
+    np.save(os.path.join(folder_path, f"{activityname}_norm_truth_{window}_train.npy"), x)
+    return
 
 
 def main():
@@ -628,10 +746,20 @@ def main():
                 empty_dict = {}
                 json.dump(empty_dict, file, indent=4)
         
+        activityfolder = os.path.join(args.resultfolder, args.activityname)
+        
+        # if there is no such folder, create one
+        if not os.path.exists(activityfolder):
+            os.makedirs(activityfolder, exist_ok=True)
+            sava_activity_data(config['dataloader']['dataset_path'], activityfolder, args.activityname, config['dataloader']['window_size'], 6)
+        
         tester = Tester(config, args, device)
+        start_time = time.time()
         tester.test()
-        tester.show_results(json_path)
-        tester.visualization(analysis='tsne')
+        end_time = time.time()
+        print(f"Testing time: {end_time - start_time}")
+        # tester.show_results(json_path)
+        # tester.visualization(analysis='tsne')
     
     # result_show = evaluation()
     

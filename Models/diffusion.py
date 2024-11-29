@@ -6,11 +6,13 @@ sys.path.append(parent_dir)
 
 import torch
 import pdb
-from Models.models import *
+# from Models.models import *
+from Models.models_new import *
 from functools import partial
 from inspect import isfunction
 from tqdm import tqdm
 
+from TimeMixer.models.TimeMixer import Model as TimeMixer
 """
 version1: 
 simple DDPM, unconditional model, when sampling, directly generate
@@ -36,14 +38,6 @@ class VarianceSchedule(nn.Module):
             betas = torch.linspace(beta_1, beta_T, steps=num_steps)
         elif mode == 'cosine':
             betas = self.cosine_beta_schedule(timesteps=num_steps)
-            # timesteps = (
-            # torch.arange(num_steps + 1) / num_steps + cosine_s
-            # )
-            # alphas = timesteps / (1 + cosine_s) * math.pi / 2
-            # alphas = torch.cos(alphas).pow(2)
-            # alphas = alphas / alphas[0]
-            # betas = 1 - alphas[1:] / alphas[:-1]
-            # betas = betas.clamp(max=0.999)
 
         betas = torch.cat([torch.zeros([1]), betas], dim=0)     # Padding
 
@@ -350,6 +344,9 @@ class GaussianProcess(nn.Module):
         self.num_steps = config_model['diff_num_steps']
         self.stride = config_model['stride']
         
+        config_timemixer = dict()
+        
+        
         # prior_len = config['dataloader']['prior_size']
         
         # self.model = UNetModel(
@@ -360,8 +357,9 @@ class GaussianProcess(nn.Module):
         self.model = UNetGenerate(
             in_channels=p_dim,
             out_channels=p_dim,
-            seq_length=seq_length
         ).to(device)
+        
+        # self.model = TimeMixer(config).to(device)
         
         self.input_dim = p_dim
         self.seq_length = seq_length
@@ -427,6 +425,13 @@ class GaussianProcess(nn.Module):
         # compute x_0 from x_t and pred noise: the reverse of `q_sample`
         return self._extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - self._extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
 
+    """
+    predict noise from start
+    start is predicted by the model
+    """
+    def predict_noise_from_start(self, x_t: torch.FloatTensor, t: torch.LongTensor, x_start: torch.FloatTensor):
+        return (self._extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x_start) / self._extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+
     def p_mean_variance(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True):
         # compute predicted mean and variance of p(x_{t-1} | x_t)
         # predict noise using model
@@ -449,30 +454,6 @@ class GaussianProcess(nn.Module):
         # compute x_{t-1}
         pred_img = model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
         return pred_img
-
-    # @torch.no_grad()
-    # def sample_generate_activity(self, label, num_steps=None):
-    #     batch_size = label.shape[0]
-    #     img = torch.randn((batch_size, self.seq_length, self.input_dim), device=self.device)
-    #     context = label
-    #     img = img.permute(0, 2, 1)
-    #     imgs = []
-    #     for i in reversed(range(0, self.num_steps)):
-    #         t = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
-    #         img = self.p_sample(context, img, t)
-    #         imgs.append(img.cpu().numpy())
-    #     img = img.permute(0, 2, 1)
-    #     return imgs, img
-    
-    # def get_loss_generate_activity(self, label, future):
-    #     future = future.permute(0, 2, 1)
-    #     batch_size = label.shape[0]
-    #     t = torch.randint(0, self.num_steps+1, (batch_size,), device=self.device)
-    #     noise = torch.randn_like(future)  # random noise ~ N(0, 1)
-    #     x_noisy = self.q_sample(future, t, noise=noise)  # x_t ~ q(x_t | x_0)
-    #     predicted_noise = self.model(label, x_noisy, t)  # predict noise from noisy image
-    #     loss = F.mse_loss(noise, predicted_noise)
-    #     return loss
 
     @torch.no_grad()
     def sample_generate(self, label, num_steps=None):
@@ -497,7 +478,6 @@ class GaussianProcess(nn.Module):
         # pdb.set_trace()
         predicted_noise = self.model(label, x_noisy, t)  # predict noise from noisy image
         loss = F.mse_loss(noise, predicted_noise)
-        # pdb.set_trace()
         return loss
     
     @torch.no_grad()
@@ -545,21 +525,23 @@ class GaussianProcess(nn.Module):
         unfolded = padded_tensor.unfold(dimension=2, size=window_size, step=1)
         smoothed_tensor = unfolded.mean(dim=-1)
         return smoothed_tensor
-    
-    # def train_losses(self, model, x_start: torch.FloatTensor, t: torch.LongTensor):
-    def get_loss_trend(self, context, future):
-        context, future = context.permute(0, 2, 1), future.permute(0, 2, 1)
-        # compute train losses
-        batch_size = context.size(0)
-        t = torch.randint(0, self.num_steps+1, (batch_size,), device=self.device)
-        noise = torch.randn_like(future)  # random noise ~ N(0, 1)
-        x_noisy = self.q_sample(future, t, noise=noise)  # x_t ~ q(x_t | x_0)
-        # print('diff_477', context.shape, x_noisy.shape, t.shape)
-        smooth_future = self.moveing_avg_filter(future, window_size=12)
-        predicted_noise = self.model(context, x_noisy, t, trend=smooth_future)  # predict noise from noisy image
-        loss = F.mse_loss(noise, predicted_noise)
-        return loss
 
+
+# Assuming output1 and output2 have the same shape (batch_size, feature_dim)
+class CombineLinear(nn.Module):
+    def __init__(self, feature_dim):
+        super(CombineLinear, self).__init__()
+        # Linear layer for combining, outputs the same dimension
+        self.linear = nn.Linear(2 * feature_dim, feature_dim)
+    
+    def forward(self, output1, output2):
+        # pdb.set_trace()
+        output1 = output1.permute(0, 2, 1)
+        output2 = output2.permute(0, 2, 1)
+        # Concatenate along the feature dimension
+        combined = torch.cat((output1, output2), dim=2)
+        # Pass through linear layer
+        return self.linear(combined).permute(0, 2, 1)
 
 class GaussianProcess_multifreq(nn.Module):
     def __init__(self, config, device):
@@ -576,15 +558,17 @@ class GaussianProcess_multifreq(nn.Module):
 
         self.model_main = UNetGenerate(
             in_channels=p_dim,
-            out_channels=p_dim,
-            seq_length=seq_length
+            out_channels=p_dim
+            # seq_length=seq_length
         ).to(device)
         
         self.model_res = UNetGenerate(
             in_channels=p_dim,
-            out_channels=p_dim,
-            seq_length=seq_length
+            out_channels=p_dim
+            # seq_length=seq_length
         ).to(device)
+        
+        self.linear = CombineLinear(p_dim).to(device)
         
         self.input_dim = p_dim
         self.seq_length = seq_length
@@ -649,22 +633,55 @@ class GaussianProcess_multifreq(nn.Module):
         # compute x_0 from x_t and pred noise: the reverse of `q_sample`
         return self._extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - self._extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
 
+    def predict_noise_from_start(self, x_t: torch.FloatTensor, t: torch.LongTensor, x_start: torch.FloatTensor):
+        return (self._extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x_start) / self._extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
 
     def p_mean_variance(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True, model='res'):
-        # compute predicted mean and variance of p(x_{t-1} | x_t)
-        # predict noise using model
         if model == 'res':
             pred_noise = self.model_res(context, x_t, t)
         else:
             pred_noise = self.model_main(context, x_t, t)
-        # pred_noise = self.model(context, x_t, t)
-        # get the predicted x_0: different from the algorithm2 in the paper
+        
         x_recon = self.predict_start_from_noise(x_t, t, pred_noise)
         if clip_denoised:
             x_recon = torch.clamp(x_recon, min=-1.0, max=1.0)
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior_mean_variance(x_recon, x_t, t)
         return model_mean, posterior_variance, posterior_log_variance
 
+    # def p_mean_variance_predimg(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True, model='res'):
+    #     # compute predicted mean and variance of p(x_{t-1} | x_t)
+    #     # predict noise using model
+    #     if model == 'res':
+    #         x_recon = self.model_res(context, x_t, t)
+    #     else:
+    #         x_recon = self.model_main(context, x_t, t)
+    #     # pred_noise = self.model(context, x_t, t)
+    #     # get the predicted x_0: different from the algorithm2 in the paper
+    #     """
+    #     different than before, because right now the model's output is actually the real img instead of the noise
+    #     """
+    #     # x_recon = self.predict_start_from_noise(x_t, t, pred_noise)
+    #     if clip_denoised:
+    #         x_recon = torch.clamp(x_recon, min=-1.0, max=1.0)
+    #     model_mean, posterior_variance, posterior_log_variance = self.q_posterior_mean_variance(x_recon, x_t, t)
+    #     return model_mean, posterior_variance, posterior_log_variance
+
+    # @torch.no_grad()
+    # def p_sample_predimg(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True, model='res'):
+    #     # denoise_step: sample x_{t-1} from x_t and pred_noise
+    #     # predict mean and variance
+    #     if model == 'res':
+    #         model_mean, _, model_log_variance = self.p_mean_variance_predimg(context, x_t, t, clip_denoised=clip_denoised, model='res')
+    #     else:
+    #         model_mean, _, model_log_variance = self.p_mean_variance_predimg(context, x_t, t, clip_denoised=clip_denoised, model='main')
+            
+    #     # model_mean, _, model_log_variance = self.p_mean_variance(context, x_t, t, clip_denoised=clip_denoised)
+    #     noise = torch.randn_like(x_t).to(self.device)
+    #     # no noise when t == 0
+    #     nonzero_mask = (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
+    #     # compute x_{t-1}
+    #     pred_img = model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
+    #     return pred_img
 
     @torch.no_grad()
     def p_sample(self, context, x_t: torch.FloatTensor, t: torch.LongTensor, clip_denoised=True, model='res'):
@@ -683,8 +700,48 @@ class GaussianProcess_multifreq(nn.Module):
         pred_img = model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
         return pred_img
     
+    """
+    need to delete the DC components and add a hanning window before the FFT
+    """
+    # def norm_and_main_freq(self, x, k):
+    #     # Apply FFT to get the frequency domain representation
+    #     z = torch.fft.rfft(x, dim=2)
+        
+    #     # Find the top k largest magnitude frequency indices
+    #     ks = torch.topk(z.abs(), k, dim=2)
+    #     top_k_indices = ks.indices
+        
+    #     # Create a mask for the top k frequencies
+    #     mask = torch.zeros_like(z)
+    #     mask.scatter_(2, top_k_indices, 1)  # Set top k frequency indices to 1
+        
+    #     # Apply mask to get the top k frequency components
+    #     z_m = z * mask  # z_m contains only the top k frequency components
+        
+    #     x_m = torch.fft.irfft(z_m, dim=2).real  # Main frequency components
+    #     x_r = x - x_m  # Remaining part (without top k frequencies)
+        
+    #     # Get the remaining frequencies (by zeroing out the top k components)
+    #     # z_r = z * (1 - mask)  # z_r contains the remaining lower magnitude frequencies
+        
+    #     # Apply inverse FFT to bring the signals back to time domain
+    #     # x_m = torch.fft.irfft(z_m, dim=2).real  # Main frequency components
+    #     # x_r = torch.fft.irfft(z_r, dim=2).real  # Remaining part (without top k frequencies)
+        
+    #     # Return both components
+    #     return x_m, x_r
+
+
+        # Remove DC component
+        # x = x - x.mean(dim=2, keepdim=True)
+        
+        # # Apply Hanning window
+        # window = torch.hann_window(x.shape[2], device=x.device)
+        # x = x * window
+        
 
     def norm_and_main_freq(self, x, k):
+
         # Apply FFT to get the frequency domain representation
         z = torch.fft.rfft(x, dim=2)
         
@@ -699,19 +756,36 @@ class GaussianProcess_multifreq(nn.Module):
         # Apply mask to get the top k frequency components
         z_m = z * mask  # z_m contains only the top k frequency components
         
-        # Get the remaining frequencies (by zeroing out the top k components)
-        z_r = z * (1 - mask)  # z_r contains the remaining lower magnitude frequencies
-        
-        # Apply inverse FFT to bring the signals back to time domain
         x_m = torch.fft.irfft(z_m, dim=2).real  # Main frequency components
-        x_r = torch.fft.irfft(z_r, dim=2).real  # Remaining part (without top k frequencies)
+        x_r = x - x_m  # Remaining part (without top k frequencies)
         
         # Return both components
         return x_m, x_r
     
+    # @torch.no_grad()
+    # def sample_generate_predimg(self, label, num_steps=None):
+    #     batch_size = label.shape[0]
+    #     img_m = torch.randn((batch_size, self.seq_length, self.input_dim), device=self.device)
+    #     img_m = img_m.permute(0, 2, 1)
+    #     img_r = torch.randn((batch_size, self.seq_length, self.input_dim), device=self.device)
+    #     img_r = img_r.permute(0, 2, 1)
+    #     context = label
+    #     # img = img.permute(0, 2, 1)
+    #     imgs = []
+    #     for i in reversed(range(0, self.num_steps)):
+    #         t = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
+    #         img_m = self.p_sample_predimg(context, img_m, t, model='main')
+    #         img_r = self.p_sample_predimg(context, img_r, t, model='res')
+            
+            
+    #         img = self.linear(img_r, img_m)
+            
+    #         imgs.append(img.cpu().numpy())
+    #     img = img.permute(0, 2, 1)
+    #     return imgs, img
     
     @torch.no_grad()
-    def sample_generate(self, label, num_steps=None):
+    def sample_generate_prednoise(self, label, num_steps=None):
         batch_size = label.shape[0]
         img_m = torch.randn((batch_size, self.seq_length, self.input_dim), device=self.device)
         img_m = img_m.permute(0, 2, 1)
@@ -730,22 +804,59 @@ class GaussianProcess_multifreq(nn.Module):
         return imgs, img
     
     
-    def get_loss_generate(self, label, future):
-        future = future.permute(0, 2, 1)
-        future_m, future_r = self.norm_and_main_freq(future, k=5)
+    # """
+    # change the loss function to use the combined output
+    # change the model's output to be the real img instead of the noise
+    # """
+    # def get_loss_generate_predimg(self, label, future):
+    #     future = future.permute(0, 2, 1)
+    #     future_m, future_r = self.norm_and_main_freq(future, k=3)
+    #     batch_size = label.shape[0]
+    #     t = torch.randint(0, self.num_steps+1, (batch_size,), device=self.device)
         
+    #     noise_r = torch.randn_like(future_r)  # random noise ~ N(0, 1)
+    #     noise_m = torch.randn_like(future_m)
+        
+    #     x_noisy_r = self.q_sample(future_r, t, noise=noise_r)
+    #     x_noisy_m = self.q_sample(future_m, t, noise=noise_m)
+        
+    #     predict_img_r = self.model_res(label, x_noisy_r, t)
+    #     predict_img_m = self.model_main(label, x_noisy_m, t)
+        
+    #     predict_img = self.linear(predict_img_r, predict_img_m)
+    #     loss = F.mse_loss(predict_img, future)
+    #     return loss
+        
+        # loss_r = F.mse_loss(noise_r, predicted_noise_r)
+        # loss_m = F.mse_loss(noise_m, predicted_noise_m)
+        # loss = alpha * loss_r + (1 - alpha) * loss_m
+        
+        # this part should be, first get the final output, then compute the total loss
+        # like
+        # img = self.linear(predict_img_r, predict_img_m)
+        # loss = F.mse_loss(img, future)
+        
+        # return loss, loss_r, loss_m
+        
+    def get_loss_generate_prednoise(self, label, future):
+        alpha = 0.6
+        future = future.permute(0, 2, 1)
+        # pdb.set_trace()
+        future_m, future_r = self.norm_and_main_freq(future, k=3)
         batch_size = label.shape[0]
         t = torch.randint(0, self.num_steps+1, (batch_size,), device=self.device)
-        noise = torch.randn_like(future)  # random noise ~ N(0, 1)
         
-        x_noisy_r = self.q_sample(future_r, t, noise=noise)
-        x_noisy_m = self.q_sample(future_m, t, noise=noise)
+        noise_r = torch.randn_like(future_r)  # random noise ~ N(0, 1)
+        noise_m = torch.randn_like(future_m)
         
-        predicted_noise_r = self.model_res(label, x_noisy_r, t)
-        predicted_noise_m = self.model_main(label, x_noisy_m, t)
+        x_noisy_r = self.q_sample(future_r, t, noise=noise_r)
+        x_noisy_m = self.q_sample(future_m, t, noise=noise_m)
         
-        loss_r = F.mse_loss(noise, predicted_noise_r)
-        loss_m = F.mse_loss(noise, predicted_noise_m)
-        return loss_r + loss_m
+        predict_noise_r = self.model_res(label, x_noisy_r, t)
+        predict_noise_m = self.model_main(label, x_noisy_m, t)
         
+        loss = alpha * F.mse_loss(noise_r, predict_noise_r) + (1-alpha) * F.mse_loss(noise_m, predict_noise_m)
+        
+        return loss
+
         
