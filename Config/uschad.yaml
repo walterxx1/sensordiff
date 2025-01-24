@@ -17,7 +17,7 @@ solver:
 
 dataloader:
   dataset_path: ./Datas/uschad_dataset.h5
-  matrix_path: /mnt/data728/datasets/USC-HAD-maodong/uschad_metrix.h5
+  matrix_path: uschad_metrix.h5
   train_batch_size: 32
   eval_batch_size: 32
 
