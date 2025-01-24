@@ -12,7 +12,7 @@ model:
 
 solver:
   num_epochs: 2000
-  learning_rate: 1.0e-4
+  learning_rate: 1.0e-3
   eval_each: 400
 
 dataloader:

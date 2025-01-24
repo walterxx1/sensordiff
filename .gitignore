@@ -174,4 +174,10 @@ Experiments_1114_200_multifreqinside/
 Experiments_1115_100_multifreqinside/
 Experiments_1118_200/
 Experiments_new/
+Experiments_1203_multilen/
+Experiments_200_TimeMixer/
+Experiments_24/
 
+Models/interpretable_diffusion/
+
+notebooks/result_compare.ipynb

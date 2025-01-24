@@ -651,6 +651,22 @@ class UNetGenerate(nn.Module):
     The full UNet model with attention and timestep embedding
     """
 
+    """
+    ori paras
+    """
+    # def __init__(
+    #     self,
+    #     in_channels=3,
+    #     model_channels=128,
+    #     out_channels=3,
+    #     num_res_blocks=2,
+    #     attention_resolutions=(8, 16),
+    #     dropout=0,
+    #     channel_mult=(1, 2, 2),
+    #     conv_resample=True,
+    #     num_heads=4,
+    #     label_num = 12,
+    # ):
     def __init__(
         self,
         in_channels=3,
@@ -659,7 +675,7 @@ class UNetGenerate(nn.Module):
         num_res_blocks=2,
         attention_resolutions=(8, 16),
         dropout=0,
-        channel_mult=(1, 2, 2),
+        channel_mult=(1, 2, 2, 2),
         conv_resample=True,
         num_heads=4,
         label_num = 12,
@@ -677,9 +693,9 @@ class UNetGenerate(nn.Module):
         self.num_heads = num_heads
 
         # time embedding
-        time_embed_dim = model_channels * 4
+        time_embed_dim = model_channels * 8
         self.time_embed = nn.Sequential(
-            nn.Linear(model_channels, time_embed_dim),
+            nn.Linear(model_channels*4, time_embed_dim),
             nn.SiLU(),
             nn.Linear(time_embed_dim, time_embed_dim),
         )
@@ -761,7 +777,144 @@ class UNetGenerate(nn.Module):
         hs = []
         # down stage
         h: torch.FloatTensor = x
-        t: torch.FloatTensor = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+        t: torch.FloatTensor = self.time_embed(timestep_embedding(timesteps, self.model_channels*4))
+        """
+        label embedding
+        """
+        label_embed = self.label_embedding(label)
+        t += label_embed
+        # pdb.set_trace()
+        for module in self.down_blocks:
+            h = module(h, t)
+            hs.append(h)
+            # print('check h shape', h.shape)
+        # middle stage
+        h = self.middle_block(h, t)
+        # up stage
+        # pdb.set_trace()
+        for module in self.up_blocks:
+            cat_in = torch.cat([h, hs.pop()], dim=1)
+            h = module(cat_in, t)
+            # print(h.shape)
+        return self.out(h)
+
+
+class UNetUnconditional(nn.Module):
+    """
+    The full UNet model with attention and timestep embedding
+    """
+
+    def __init__(
+        self,
+        in_channels=3,
+        model_channels=128,
+        out_channels=3,
+        num_res_blocks=2,
+        attention_resolutions=(8, 16),
+        dropout=0,
+        channel_mult=(1, 2, 2),
+        conv_resample=True,
+        num_heads=4,
+        label_num = 12,
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.model_channels = model_channels
+        self.out_channels = out_channels
+        self.num_res_blocks = num_res_blocks
+        self.attention_resolutions = attention_resolutions
+        self.dropout = dropout
+        self.channel_mult = channel_mult
+        self.conv_resample = conv_resample
+        self.num_heads = num_heads
+
+        # time embedding
+        time_embed_dim = model_channels * 8
+        self.time_embed = nn.Sequential(
+            nn.Linear(model_channels*4, time_embed_dim),
+            nn.SiLU(),
+            nn.Linear(time_embed_dim, time_embed_dim),
+        )
+
+        # context embedding
+        # self.ctx_conv1 = nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1)
+        # self.ctx_conv2 = nn.Conv1d(in_channels, model_channels*2, kernel_size=3, padding=1)
+        
+        self.label_embedding = nn.Embedding(label_num, time_embed_dim)
+        
+        """
+        Add an encoder for context to be similar as the LDM
+        """
+        
+        
+        # down blocks
+        self.down_blocks = nn.ModuleList([TimestepEmbedSequential(nn.Conv1d(in_channels, model_channels, kernel_size=3, padding=1))])
+        down_block_chans = [model_channels]
+        ch = model_channels # current input channel size
+        ds = 1
+        """
+        level and multiply coefficient for each stage
+        """
+        for level, mult in enumerate(channel_mult):
+            """
+            Every stage contains several residual blocks
+            """
+            for _ in range(num_res_blocks):
+                layers = [ResidualBlock(ch, mult * model_channels, time_embed_dim, dropout)]
+                ch = mult * model_channels # next layer's input channel size
+                if ds in attention_resolutions:
+                    layers.append(AttentionBlock(ch, num_heads=num_heads))
+                self.down_blocks.append(TimestepEmbedSequential(*layers))
+                down_block_chans.append(ch)
+            if level != len(channel_mult) - 1:  # don't use downsample for the last stage
+                self.down_blocks.append(TimestepEmbedSequential(Downsample(ch, conv_resample)))
+                down_block_chans.append(ch)
+                ds *= 2
+
+        # middle block
+        self.middle_block = TimestepEmbedSequential(ResidualBlock(ch, ch, time_embed_dim, dropout), AttentionBlock(ch, num_heads=num_heads), ResidualBlock(ch, ch, time_embed_dim, dropout))
+        # up blocks
+        self.up_blocks = nn.ModuleList([])
+        for level, mult in list(enumerate(channel_mult))[::-1]:
+            for i in range(num_res_blocks + 1):
+                layers = [ResidualBlock(ch + down_block_chans.pop(), model_channels * mult, time_embed_dim, dropout)]
+                ch = model_channels * mult
+                if ds in attention_resolutions:
+                    layers.append(AttentionBlock(ch, num_heads=num_heads))
+                if level and i == num_res_blocks:
+                    layers.append(Upsample(ch, conv_resample))
+                    ds //= 2
+                self.up_blocks.append(TimestepEmbedSequential(*layers))
+
+        """
+        Add an decoder for context to be similar as the LDM
+        """
+        
+
+        self.out = nn.Sequential(
+            norm_layer(ch),
+            nn.SiLU(),
+            nn.Conv1d(model_channels, out_channels, kernel_size=3, padding=1),
+        )
+
+    # def forward(self, x: torch.FloatTensor, t: torch.LongTensor, y: torch.LongTensor):
+    # def forward(self, context: torch.FloatTensor, x: torch.FloatTensor, timesteps: torch.LongTensor):
+    def forward(self, label: torch.LongTensor, x: torch.FloatTensor, timesteps: torch.LongTensor):
+        """Apply the model to an input batch.
+
+        Args:
+            label (Tensor): [N,] acitvity labels
+            x (Tensor): [N x C x L]
+            timesteps (Tensor): [N,] a 1-D batch of timesteps.
+
+        Returns:
+            Tensor: [N x C x ...]
+        """
+        hs = []
+        # down stage
+        h: torch.FloatTensor = x
+        t: torch.FloatTensor = self.time_embed(timestep_embedding(timesteps, self.model_channels*4))
         """
         label embedding
         """
@@ -792,9 +945,10 @@ if __name__ == "__main__":
     t = torch.randint(0, 20, (32,), device='cpu').long()
     # model = SimpleCNN(in_channel=6, num_channels=[16, 32], kernel_size=3, dropout=0)
     model = UNetGenerate(in_channels=6, out_channels=6)
+    print(model)
     # model = UNetModel(in_channels=6, out_channels=6)
-    output = model(label, x, t)
+    # output = model(label, x, t)
     # output = model(ctx, x, t)
     
-    print("Output shape:", output.shape)  # Output should be: (32, 64)
+    # print("Output shape:", output.shape)  # Output should be: (32, 64)
         
